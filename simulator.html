@@ -189,16 +189,52 @@ if (index === 0) {
                     <input type="number" id="gradientMin" placeholder="Min (e.g., -1)" step="0.1" value="-1">
                     <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
                 </div>
-                <label for="colorLogic">Color Logic Function(value, stats, range)</label>
-                <textarea id="colorLogic">const positiveMax = range.max > 0 ? range.max : 1;
-const negativeMin = range.min < 0 ? range.min : -1;
-const clamp = (num) => Math.min(Math.max(num, 0), 1);
+                <label for="colorLogic">Color Logic Function(value, stats, range, context)</label>
+                <textarea id="colorLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
+const safeMax = range.max > 0 ? range.max : 1;
+const safeMin = range.min < 0 ? range.min : -1;
+const viewScale = (context && typeof context.scale === 'number') ? context.scale : 1;
+const intensity = viewScale < 1 ? Math.min(1.6, Math.pow(1 / Math.max(viewScale, 0.0001), 0.3)) : 1;
+
+const sampleStops = (stops, ratio) => {
+    const clamped = clamp01(ratio);
+    if (clamped <= stops[0].stop) return stops[0].rgb.slice();
+    for (let i = 0; i < stops.length - 1; i++) {
+        const left = stops[i];
+        const right = stops[i + 1];
+        if (clamped >= left.stop && clamped <= right.stop) {
+            const span = right.stop - left.stop || 1;
+            const t = (clamped - left.stop) / span;
+            return left.rgb.map((channel, idx) =>
+                Math.round(channel + (right.rgb[idx] - channel) * t)
+            );
+        }
+    }
+    return stops[stops.length - 1].rgb.slice();
+};
+
+const enhanceRatio = (ratio) => clamp01(Math.pow(clamp01(ratio), 1 / intensity));
+const toCss = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+const positiveStops = [
+    { stop: 0, rgb: [255, 250, 165] },
+    { stop: 0.33, rgb: [253, 197, 110] },
+    { stop: 0.66, rgb: [244, 109, 67] },
+    { stop: 1, rgb: [180, 23, 44] },
+];
+const negativeStops = [
+    { stop: 0, rgb: [194, 230, 255] },
+    { stop: 0.33, rgb: [123, 190, 222] },
+    { stop: 0.66, rgb: [50, 136, 189] },
+    { stop: 1, rgb: [3, 52, 118] },
+];
+
 if (value >= 0) {
-    const ratio = clamp(value / positiveMax);
-    return `hsl(8, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;
+    const ratio = enhanceRatio(value / safeMax);
+    return toCss(sampleStops(positiveStops, ratio));
 }
-const ratio = clamp(Math.abs(value / negativeMin));
-return `hsl(220, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;</textarea>
+const ratio = enhanceRatio(Math.abs(value / safeMin));
+return toCss(sampleStops(negativeStops, ratio));</textarea>
             </div>
             
             <div class="control-group">
@@ -268,21 +304,81 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeEditors = {};
     const defaultColorLogicSource = controls.colorLogic.value;
     const defaultPropagationSource = controls.propagationLogic.value;
-    const defaultColorFunction = (value, stats, range) => {
-        const positiveMax = range.max > 0 ? range.max : 1;
-        const negativeMin = range.min < 0 ? range.min : -1;
-        const clamp = (num) => Math.min(Math.max(num, 0), 1);
-        if (value >= 0) {
-            const ratio = clamp(value / positiveMax);
-            return `hsl(8, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;
+
+    const positiveColorStops = [
+        { stop: 0, rgb: [255, 250, 165] },
+        { stop: 0.33, rgb: [253, 197, 110] },
+        { stop: 0.66, rgb: [244, 109, 67] },
+        { stop: 1, rgb: [180, 23, 44] },
+    ];
+    const negativeColorStops = [
+        { stop: 0, rgb: [194, 230, 255] },
+        { stop: 0.33, rgb: [123, 190, 222] },
+        { stop: 0.66, rgb: [50, 136, 189] },
+        { stop: 1, rgb: [3, 52, 118] },
+    ];
+
+    const clamp01 = (value) => Math.min(Math.max(value, 0), 1);
+    const sampleColorStops = (stops, ratio) => {
+        if (!stops.length) return [255, 255, 255];
+        const clamped = clamp01(ratio);
+        if (clamped <= stops[0].stop) return stops[0].rgb.slice();
+        for (let i = 0; i < stops.length - 1; i++) {
+            const left = stops[i];
+            const right = stops[i + 1];
+            if (clamped >= left.stop && clamped <= right.stop) {
+                const span = right.stop - left.stop || 1;
+                const t = (clamped - left.stop) / span;
+                return left.rgb.map((channel, idx) =>
+                    Math.round(channel + (right.rgb[idx] - channel) * t)
+                );
+            }
         }
-        const ratio = clamp(Math.abs(value / negativeMin));
-        return `hsl(220, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;
+        return stops[stops.length - 1].rgb.slice();
+    };
+    const accentuateRatio = (ratio, intensity) => {
+        const safeIntensity = Math.max(intensity, 1);
+        return clamp01(Math.pow(clamp01(ratio), 1 / safeIntensity));
+    };
+    const rgbArrayToCss = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+    const defaultColorFunction = (value, stats, range, context = {}) => {
+        const safeMax = range.max > 0 ? range.max : 1;
+        const safeMin = range.min < 0 ? range.min : -1;
+        const scale = (context && typeof context.scale === 'number' && Number.isFinite(context.scale))
+            ? context.scale
+            : 1;
+        const intensity = scale < 1
+            ? Math.min(1.6, Math.pow(1 / Math.max(scale, 0.0001), 0.3))
+            : 1;
+
+        if (value >= 0) {
+            const ratio = accentuateRatio(value / safeMax, intensity);
+            return rgbArrayToCss(sampleColorStops(positiveColorStops, ratio));
+        }
+        const ratio = accentuateRatio(Math.abs(value / safeMin), intensity);
+        return rgbArrayToCss(sampleColorStops(negativeColorStops, ratio));
     };
     let config = {};
     let grid = new Map();
     let selectedNodeKey = null;
     let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
+
+    const MIN_PIXEL_NODE_RADIUS = 3;
+    const MIN_PIXEL_EDGE_WIDTH = 0.6;
+    const MIN_PIXEL_SELECTION_WIDTH = 1.8;
+
+    function getNodeRadius() {
+        return Math.max(0.2, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
+    }
+
+    function getEdgeWidth() {
+        return Math.max(0.02, MIN_PIXEL_EDGE_WIDTH / Math.max(view.scale, 0.0001));
+    }
+
+    function getSelectionWidth() {
+        return Math.max(0.12, MIN_PIXEL_SELECTION_WIDTH / Math.max(view.scale, 0.0001));
+    }
 
     function getCodeValue(id) {
         if (codeEditors[id]) return codeEditors[id].getValue();
@@ -406,9 +502,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const stats = computeGridStats();
         const gradientRange = resolveGradientRange(stats);
+        const colorContext = { scale: view.scale };
+        const edgeWidth = getEdgeWidth();
+        const nodeRadius = getNodeRadius();
+        const selectionWidth = getSelectionWidth();
 
-        ctx.strokeStyle = '#555';
-        ctx.lineWidth = 0.05;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+        ctx.lineWidth = edgeWidth;
         for (const [key, node] of grid.entries()) {
              const [x1, y1] = key.split(',').map(Number);
              node.parents.forEach(parentKey => {
@@ -424,14 +524,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         for (const [key, node] of grid.entries()) {
             const [x, y] = key.split(',').map(Number);
-            ctx.fillStyle = getNodeColor(node.value, stats, gradientRange);
+            ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
             ctx.beginPath();
-            ctx.arc(x, y, 0.2, 0, 2 * Math.PI);
+            ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI);
             ctx.fill();
             if (key === selectedNodeKey) {
                 ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 0.1;
+                ctx.lineWidth = selectionWidth;
                 ctx.stroke();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+                ctx.lineWidth = edgeWidth;
             }
         }
         ctx.restore();
@@ -479,14 +581,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function getNodeColor(value, stats, range) {
+    function getNodeColor(value, stats, range, context) {
         try {
-            const result = config.colorFn(value, stats, range);
+            const result = config.colorFn(value, stats, range, context);
             if (typeof result === 'string') return result;
         } catch (error) {
             console.warn('Color logic error', error);
         }
-        return defaultColorFunction(value, stats, range);
+        return defaultColorFunction(value, stats, range, context);
     }
     
     function updateConfigFromUI() {
@@ -538,8 +640,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const colorLogicSource = getCodeValue('colorLogic');
         let colorFn;
         try {
-            colorFn = new Function('value', 'stats', 'range', `return (() => { ${colorLogicSource} })();`);
-            colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 });
+            colorFn = new Function('value', 'stats', 'range', 'context', `return (() => { ${colorLogicSource} })();`);
+            colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale });
         } catch (error) {
             setEditorError('colorLogic', true);
             return false;
@@ -585,9 +687,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const rect = canvas.getBoundingClientRect();
         const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / view.scale;
         const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / view.scale;
+        const hitRadius = Math.max(getNodeRadius(), 0.3);
         for (const [key, node] of grid.entries()) {
             const [nodeX, nodeY] = key.split(',').map(Number);
-            if (Math.sqrt((gridX - nodeX)**2 + (gridY - nodeY)**2) < 0.3) return key;
+            if (Math.hypot(gridX - nodeX, gridY - nodeY) < hitRadius) return key;
         }
         return null;
     }
