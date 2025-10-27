@@ -5,7 +5,7 @@ The Advanced Grid Propagation Simulator is a single-page exploration lab for lat
 ## Highlights
 - Resizable control column with a collapsible editor stack; layout choices (width, editor height, collapsed state) persist via `localStorage`.
 - Tabbed CodeMirror editors for primary/secondary propagation, effective-value composition, backpropagation, custom reunification, color, and HDR logic—each wired to live re-evaluation with inline error surfacing.
-- Five curated presets (Pascal, Divergent, Backwards, Decay, Sierpinski) that illustrate different move sets, reunification strategies, and rendering palettes.
+- Six curated presets (Pascal, Divergent, Backwards, Decay, Sierpinski, Sierpinski-Zeta) that illustrate different move sets, reunification strategies, and rendering palettes.
 - Backpropagation loop support that iterates user-defined heuristics over parent/child pairs after the forward sweep.
 - Inspector panel with lineage chips, value summaries, optional binary path enumeration popovers, and view-aware gradient statistics.
 - Canvas renderer that auto-aggregates distant nodes, blends global and viewport statistics, and drives an HDR-aware color grading pipeline.
@@ -19,7 +19,7 @@ The Advanced Grid Propagation Simulator is a single-page exploration lab for lat
 - **Simulation Core** – Choose the number of generations, set the reunification strategy (`sum`, `average`, `max`, or user-defined `personalized` logic), and specify optional backpropagation steps that run after each generation.
 - **Propagation Rules** – Define the move vectors as raw JSON. Two moves enable Pascal-style branches; additional vectors unlock multi-parent rendezvous or backtracking paths.
 - **Logic Editors** – The tabbed editors accept JavaScript snippets that return functions. Toggling the personalized reunification strategy automatically reveals the matching editor. You can hide the entire editor stack for presentation mode; reopening restores the previous height.
-- **Presets** – Buttons seed the workspace with canned move sets and logic. The Sierpinski preset demonstrates parity-driven rendering, Backwards introduces a negative move to revisit ancestors, and Divergent/Decay highlight gain and attenuation flows.
+- **Presets** – Buttons seed the workspace with canned move sets and logic. The Sierpinski preset demonstrates parity-driven rendering, Sierpinski-Zeta folds that lattice into a harmonic zeta(1) field with adaptive backprop filling the dark voids, Backwards introduces a negative move to revisit ancestors, and Divergent/Decay highlight gain and attenuation flows.
 - **Projects** – Name the current configuration and save it to `localStorage`. Saved studies include logic snippets, gradient preferences, and layout mode. Load or delete entries directly from the sidebar.
 - **Inspector & Analytics** – Clicking a node reveals coordinates, generation, parent/child links, and aggregated dimension metadata. Binary path analytics compute $\binom{n}{k}$ counts, 0/1 histograms, and sample enumerations; set `ENABLE_HOVER_ENUMERATION_POPUP` to `true` in `simulator.html` to mirror these details in hover tooltips.
 - **Canvas Interaction** – Drag to pan, scroll to zoom. When you zoom out beyond an adaptive threshold the renderer clusters nearby nodes, tracking min/max values per bucket to keep the visualization legible.
@@ -113,6 +113,11 @@ X = \sum_{i=1}^{n} s_i \cdot 2^{-(i-1)}, \qquad s_i \in \{-1, +1\},
 $$
 
 which produce Cantor-like dust with no coincidences. Implementing those moves requires extending the simulator to four diagonal vectors with diminishing magnitudes; the existing framework already supports variable-length move sets and custom reunification to explore such systems.
+
+### Sierpinski-Zeta Preset
+The Sierpinski-Zeta preset layers a truncated harmonic series over the classic parity mask so each generation samples the divergence of $\zeta(s)$ near its pole at $s = 1$. Parity-odd nodes climb along the harmonic envelope while parity-even voids receive a controlled negative pressure; a single backprop step then reconciles those voids with the target harmonic depth.
+
+The associated color ramp maps positive lobes to turquoise spectral bands and drives negative wells toward magenta-black, making the Sierpiński "shadow" triangles visible as a programmable bridge to zeta dynamics.
 
 ## Reference Material
 - `studies/grid-analysis-ITA.md` – combinatorial theory, trinomial expansions, and fractal lattice discourse.

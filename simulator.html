@@ -642,6 +642,7 @@ return clamp01(result);</textarea>
                     <button id="presetBackwards">Echo</button>
                     <button id="presetDecay">Decay</button>
                     <button id="presetSierpinski">Sierpinski</button>
+                    <button id="presetSierpinskiZeta">Sierpinski-Zeta</button>
                 </div>
             </div>
 
@@ -896,6 +897,7 @@ class GridSimulatorApp {
             presetBackwards: document.getElementById('presetBackwards'),
             presetDecay: document.getElementById('presetDecay'),
             presetSierpinski: document.getElementById('presetSierpinski'),
+            presetSierpinskiZeta: document.getElementById('presetSierpinskiZeta'),
             inspectorCloseBtn: document.getElementById('inspector-close-btn'),
             gradientMode: document.getElementById('gradientMode'),
             gradientMin: document.getElementById('gradientMin'),
@@ -3263,6 +3265,22 @@ class GridSimulatorApp {
                 generations: 180,
                 reunification: 'sum',
             },
+            sierpinskiZeta: {
+                moves: `[[1, -1], [1, 1]]`,
+                propagation: {
+                    primary: `const discrete = parentDimensions?.primary?.value;\nif (Number.isFinite(discrete)) {\n    return Math.abs(Math.round(discrete)) % 2;\n}\nreturn Math.abs(Math.round(parentValue)) % 2;`,
+                    secondary: defaultPropagationSources.secondary,
+                },
+                effective: `const raw = dimensions.primary?.value ?? 0;\nconst parity = Math.abs(Math.round(raw)) % 2;\nconst generation = context.generation ?? 0;\nconst coords = (context.key || '0,0').split(',');\nconst x = Number(coords[0]) || 0;\nconst y = Number(coords[1]) || 0;\nconst radius = Math.sqrt(x * x + y * y);\nconst terms = Math.min(256, Math.max(2, generation + 2));\nlet harmonic = 0;\nfor (let n = 1; n <= terms; n++) {\n    harmonic += 1 / n;\n}\nconst angular = Math.cos((x - y) * 0.045 + generation * 0.08);\nconst distortion = Math.sin(radius * 0.085 + generation * 0.12);\nconst warp = 1 + distortion * 0.65 + angular * 0.35;\nconst zetaPole = harmonic * Math.max(0.2, warp);\nif (parity === 1) {\n    return zetaPole;\n}\nconst holeBoost = raw > 1 ? 0.65 : 0.35;\nreturn -zetaPole * holeBoost;`,
+                backprop: `const discrete = childState.dimensions?.primary?.value ?? 0;\nconst parity = Math.abs(Math.round(discrete)) % 2;\nif (parity === 1) return null;\nconst generation = context.generation ?? childState.generation ?? 0;\nconst terms = Math.min(256, Math.max(2, generation + 2));\nlet harmonic = 0;\nfor (let n = 1; n <= terms; n++) {\n    harmonic += 1 / n;\n}\nconst target = -harmonic * (discrete > 1 ? 0.65 : 0.35);\nconst delta = (target - childState.value) * 0.3;\nif (!Number.isFinite(delta) || Math.abs(delta) < 1e-6) return null;\nreturn { child: { valueDelta: delta } };`,
+                backpropSteps: 1,
+                gradientMode: 'custom',
+                gradientCustom: { min: -10, max: 10 },
+                colorLogic: `const amplitude = Math.abs(value);\nconst span = Math.max(Math.abs(range.max), Math.abs(range.min), 1);\nconst normalized = Math.min(1, amplitude / span);\nconst hue = value >= 0 ? 190 - normalized * 60 : 320 + normalized * 25;\nconst saturation = 58 + normalized * 30;\nconst lightness = value >= 0 ? 24 + normalized * 42 : 46 - normalized * 20;\nreturn 'hsl(' + Math.round(hue) + ', ' + Math.round(saturation) + '%, ' + Math.round(lightness) + '%)';`,
+                hdrLogic: defaultHdrLogicSource,
+                generations: 192,
+                reunification: 'sum',
+            },
         };
 
         function loadPreset(preset) {
@@ -3328,6 +3346,7 @@ class GridSimulatorApp {
         controls.presetBackwards.onclick = () => loadPreset(presets.backwards);
         controls.presetDecay.onclick = () => loadPreset(presets.decay);
         controls.presetSierpinski.onclick = () => loadPreset(presets.sierpinski);
+        controls.presetSierpinskiZeta.onclick = () => loadPreset(presets.sierpinskiZeta);
         controls.inspectorCloseBtn.onclick = () => {
             inspectorPanel.style.display = 'none';
             selectedNodeKey = null;
