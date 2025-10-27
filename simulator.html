@@ -30,16 +30,29 @@
         #main-container {
             display: flex;
             flex-grow: 1;
+            min-width: 0;
         }
 
         #controls {
             width: 380px;
+            min-width: 260px;
+            max-width: 720px;
             padding: 15px;
             background-color: var(--panel-bg);
             border-right: 2px solid var(--border-color);
             overflow-y: auto;
             display: flex;
             flex-direction: column;
+            box-sizing: border-box;
+        }
+
+        #sidebarResizer {
+            flex: 0 0 6px;
+            width: 6px;
+            cursor: col-resize;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            border-right: 1px solid rgba(0, 0, 0, 0.35);
         }
 
         #canvas-container {
@@ -47,6 +60,7 @@
             position: relative;
             background-color: var(--bg-color);
             cursor: grab;
+            min-width: 0;
         }
         #canvas-container:active { cursor: grabbing; }
 
@@ -85,17 +99,17 @@
         }
         
         textarea { font-family: "Courier New", monospace; resize: vertical; }
-        #propagationLogic { height: 120px; }
 
-        .editor-container {
-            position: relative;
-        }
+        .editor-container { position: relative; }
         .CodeMirror {
             height: auto;
             background-color: var(--input-bg);
             border-radius: 4px;
             border: 1px solid var(--border-color);
             font-size: 0.9em;
+        }
+        .CodeMirror-scroll {
+            padding-bottom: 8px;
         }
         .editor-error {
             box-shadow: 0 0 0 1px var(--error-color);
@@ -114,6 +128,109 @@
         .storage-buttons { display: flex; gap: 10px; }
         #deleteProjectBtn { background-color: #c94c4c; }
         #deleteProjectBtn:hover { background-color: #e06c6c; }
+
+        body.resizing-horizontal,
+        body.resizing-vertical {
+            user-select: none;
+        }
+        body.resizing-horizontal { cursor: col-resize; }
+        body.resizing-vertical { cursor: row-resize; }
+
+        #codeEditorPanel {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #codeEditorPanel.collapsed {
+            gap: 0;
+        }
+        .editor-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .editor-header h3 {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 0;
+        }
+        .editor-toggle {
+            width: auto;
+            padding: 6px 12px;
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+        }
+        .editor-toggle:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+        .editor-tabs {
+            display: flex;
+            gap: 6px;
+        }
+        .editor-tab {
+            width: auto;
+            flex: 1;
+            padding: 6px 10px;
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-color);
+            font-size: 0.9em;
+            transition: background-color 0.15s, border-color 0.15s;
+        }
+        .editor-tab.active {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+        .editor-tab:not(.active):hover {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        .editor-content {
+            position: relative;
+            height: 240px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background-color: var(--input-bg);
+            overflow: hidden;
+        }
+        #codeEditorPanel.collapsed .editor-tabs,
+        #codeEditorPanel.collapsed .editor-content,
+        #codeEditorPanel.collapsed .editor-resizer {
+            display: none;
+        }
+        .editor-pane {
+            position: absolute;
+            inset: 0;
+            display: none;
+            padding: 8px;
+            box-sizing: border-box;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .editor-pane.active {
+            display: flex;
+        }
+        .editor-pane label {
+            margin-bottom: 0;
+            font-size: 0.85em;
+            opacity: 0.85;
+        }
+        .editor-pane .CodeMirror {
+            flex: 1;
+            height: 100%;
+        }
+        .editor-resizer {
+            height: 10px;
+            cursor: row-resize;
+            border: 1px solid rgba(0, 0, 0, 0.4);
+            border-radius: 4px;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.02));
+        }
+        .editor-resizer:hover {
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.06));
+        }
 
         #inspector-panel {
             position: absolute;
@@ -167,30 +284,31 @@
                 <h3>Propagation Rules</h3>
                 <label for="moves">Move Vectors [dx, dy]</label>
                 <textarea id="moves">[[1, -1], [1, 1]]</textarea>
-                <label for="propagationLogic">Propagation Function(parentValue, index, move)</label>
-                <textarea id="propagationLogic">// 'Left' branch (index 0) gains value, 'right' loses.
+            </div>
+
+            <div class="control-group" id="codeEditorPanel">
+                <div class="editor-header">
+                    <h3>Logic Editors</h3>
+                    <button type="button" class="editor-toggle" id="editorToggleBtn" aria-expanded="true">Hide Editors</button>
+                </div>
+                <div class="editor-tabs" id="codeEditorTabs">
+                    <button type="button" class="editor-tab active" data-target-editor="propagationLogic">Propagation</button>
+                    <button type="button" class="editor-tab" data-target-editor="colorLogic">Color</button>
+                    <button type="button" class="editor-tab" data-target-editor="hdrLogic">HDR</button>
+                </div>
+                <div class="editor-content" id="codeEditorContent">
+                    <div class="editor-pane active" data-editor-pane="propagationLogic">
+                        <label for="propagationLogic">Propagation Function(parentValue, index, move)</label>
+                        <textarea id="propagationLogic">// 'Left' branch (index 0) gains value, 'right' loses.
 if (index === 0) {
     return parentValue + 0.2;
 } else {
     return parentValue - 0.3;
 }</textarea>
-            </div>
-
-            <div class="control-group">
-                <h3>Visualization</h3>
-                <label for="gradientMode">Gradient Scale</label>
-                <select id="gradientMode">
-                    <option value="symmetric" selected>Symmetric ±max</option>
-                    <option value="positive">0 → max</option>
-                    <option value="negative">min → 0</option>
-                    <option value="custom">Custom range</option>
-                </select>
-                <div id="customGradientInputs">
-                    <input type="number" id="gradientMin" placeholder="Min (e.g., -1)" step="0.1" value="-1">
-                    <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
-                </div>
-                <label for="colorLogic">Color Logic Function(value, stats, range, context)</label>
-                <textarea id="colorLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
+                    </div>
+                    <div class="editor-pane" data-editor-pane="colorLogic">
+                        <label for="colorLogic">Color Logic Function(value, stats, range, context)</label>
+                        <textarea id="colorLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
 const safeMax = range.max > 0 ? range.max : 1;
 const safeMin = range.min < 0 ? range.min : -1;
 const viewScale = (context && typeof context.scale === 'number') ? context.scale : 1;
@@ -240,8 +358,10 @@ if (value >= 0) {
 const hdrRatio = applyHDR({ ratio: Math.abs(value / safeMin), value, stats, range, polarity: 'negative', scale: viewScale });
 const ratio = enhanceRatio(hdrRatio);
 return toCss(sampleStops(negativeStops, ratio));</textarea>
-                <label for="hdrLogic">HDR Mapping Function(input, context)</label>
-                <textarea id="hdrLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
+                    </div>
+                    <div class="editor-pane" data-editor-pane="hdrLogic">
+                        <label for="hdrLogic">HDR Mapping Function(input, context)</label>
+                        <textarea id="hdrLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
 const { ratio, scale } = input;
 const base = clamp01(ratio);
 const shoulder = Math.log1p(base * 8) / Math.log1p(8);
@@ -252,6 +372,24 @@ if (scale && scale < 1) {
     result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
 }
 return clamp01(result);</textarea>
+                    </div>
+                </div>
+                <div class="editor-resizer" id="editorResizer" title="Drag to resize editors"></div>
+            </div>
+
+            <div class="control-group">
+                <h3>Visualization</h3>
+                <label for="gradientMode">Gradient Scale</label>
+                <select id="gradientMode">
+                    <option value="symmetric" selected>Symmetric ±max</option>
+                    <option value="positive">0 → max</option>
+                    <option value="negative">min → 0</option>
+                    <option value="custom">Custom range</option>
+                </select>
+                <div id="customGradientInputs">
+                    <input type="number" id="gradientMin" placeholder="Min (e.g., -1)" step="0.1" value="-1">
+                    <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
+                </div>
             </div>
             
             <div class="control-group">
@@ -274,7 +412,7 @@ return clamp01(result);</textarea>
                 <select id="loadProjectSelect"></select>
             </div>
         </div>
-
+        <div id="sidebarResizer" role="separator" aria-orientation="vertical" aria-label="Resize controls panel"></div>
         <div id="canvas-container">
             <canvas id="gridCanvas"></canvas>
             <div id="inspector-panel">
@@ -317,12 +455,191 @@ document.addEventListener('DOMContentLoaded', () => {
         colorLogic: document.getElementById('colorLogic'),
         hdrLogic: document.getElementById('hdrLogic'),
     };
+    const controlsPanel = document.getElementById('controls');
+    const editorPanel = document.getElementById('codeEditorPanel');
+    const editorTabs = Array.from(document.querySelectorAll('.editor-tab'));
+    const editorPanes = Array.from(document.querySelectorAll('.editor-pane'));
+    const editorContent = document.getElementById('codeEditorContent');
+    const editorToggleBtn = document.getElementById('editorToggleBtn');
+    const editorResizer = document.getElementById('editorResizer');
+    const sidebarResizer = document.getElementById('sidebarResizer');
+
+    const STORAGE_KEYS = {
+        editorHeight: 'gridSimEditorHeight',
+        sidebarWidth: 'gridSimSidebarWidth',
+        editorCollapsed: 'gridSimEditorCollapsed',
+    };
+    const MIN_EDITOR_HEIGHT = 160;
+    const MAX_EDITOR_HEIGHT = 640;
+    const MIN_SIDEBAR_WIDTH = 260;
+    const MAX_SIDEBAR_WIDTH = 720;
+
+    const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max);
+
+    let activeEditorId = 'propagationLogic';
+    let editorHeight = 240;
+    let isEditorCollapsed = false;
+
+    if (editorContent) {
+        const storedHeight = parseInt(localStorage.getItem(STORAGE_KEYS.editorHeight), 10);
+        if (Number.isFinite(storedHeight)) {
+            editorHeight = clampNumber(storedHeight, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
+        } else {
+            editorHeight = clampNumber(editorContent.offsetHeight || editorHeight, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
+        }
+        editorContent.style.height = `${editorHeight}px`;
+    }
+
+    if (editorPanel) {
+        isEditorCollapsed = localStorage.getItem(STORAGE_KEYS.editorCollapsed) === 'true';
+        if (isEditorCollapsed) {
+            editorPanel.classList.add('collapsed');
+            if (editorToggleBtn) {
+                editorToggleBtn.textContent = 'Show Editors';
+                editorToggleBtn.setAttribute('aria-expanded', 'false');
+            }
+        } else if (editorToggleBtn) {
+            editorToggleBtn.setAttribute('aria-expanded', 'true');
+        }
+    }
+
+    if (controlsPanel) {
+        const storedWidth = parseInt(localStorage.getItem(STORAGE_KEYS.sidebarWidth), 10);
+        if (Number.isFinite(storedWidth)) {
+            controlsPanel.style.width = `${clampNumber(storedWidth, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)}px`;
+        }
+    }
 
     const customGradientInputs = document.getElementById('customGradientInputs');
     const codeEditors = {};
     const defaultColorLogicSource = controls.colorLogic.value;
     const defaultPropagationSource = controls.propagationLogic.value;
     const defaultHdrLogicSource = controls.hdrLogic.value;
+
+    function refreshEditorAfterLayout(editorId) {
+        const instance = codeEditors[editorId];
+        if (!instance) return;
+        requestAnimationFrame(() => instance.refresh());
+    }
+
+    function ensureEditorExpanded() {
+        if (!editorPanel || !editorPanel.classList.contains('collapsed')) return;
+        editorPanel.classList.remove('collapsed');
+        isEditorCollapsed = false;
+        if (editorToggleBtn) {
+            editorToggleBtn.textContent = 'Hide Editors';
+            editorToggleBtn.setAttribute('aria-expanded', 'true');
+        }
+        localStorage.setItem(STORAGE_KEYS.editorCollapsed, 'false');
+        if (editorContent) editorContent.style.height = `${editorHeight}px`;
+        refreshEditorAfterLayout(activeEditorId);
+    }
+
+    function setActiveEditor(editorId) {
+        if (!editorId) editorId = activeEditorId;
+        activeEditorId = editorId;
+        editorTabs.forEach(tab => {
+            const isActive = tab.dataset.targetEditor === activeEditorId;
+            tab.classList.toggle('active', isActive);
+            tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+        editorPanes.forEach(pane => {
+            const isActive = pane.dataset.editorPane === activeEditorId;
+            pane.classList.toggle('active', isActive);
+        });
+        if (!isEditorCollapsed) refreshEditorAfterLayout(activeEditorId);
+    }
+
+    editorTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            if (!tab.dataset.targetEditor) return;
+            ensureEditorExpanded();
+            setActiveEditor(tab.dataset.targetEditor);
+        });
+    });
+
+    if (editorToggleBtn && editorPanel) {
+        editorToggleBtn.addEventListener('click', () => {
+            const willCollapse = !editorPanel.classList.contains('collapsed');
+            editorPanel.classList.toggle('collapsed', willCollapse);
+            isEditorCollapsed = willCollapse;
+            if (willCollapse) {
+                editorToggleBtn.textContent = 'Show Editors';
+                editorToggleBtn.setAttribute('aria-expanded', 'false');
+            } else {
+                editorToggleBtn.textContent = 'Hide Editors';
+                editorToggleBtn.setAttribute('aria-expanded', 'true');
+                if (editorContent) editorContent.style.height = `${editorHeight}px`;
+                refreshEditorAfterLayout(activeEditorId);
+            }
+            localStorage.setItem(STORAGE_KEYS.editorCollapsed, willCollapse ? 'true' : 'false');
+        });
+    }
+
+    if (editorResizer && editorContent) {
+        let resizingEditors = false;
+        let startY = 0;
+        let startHeight = editorHeight;
+
+        editorResizer.addEventListener('mousedown', event => {
+            if (isEditorCollapsed) return;
+            event.preventDefault();
+            resizingEditors = true;
+            startY = event.clientY;
+            startHeight = editorContent.offsetHeight || editorHeight;
+            document.body.classList.add('resizing-vertical');
+        });
+
+        window.addEventListener('mousemove', event => {
+            if (!resizingEditors) return;
+            const delta = event.clientY - startY;
+            editorHeight = clampNumber(startHeight + delta, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
+            editorContent.style.height = `${editorHeight}px`;
+            refreshEditorAfterLayout(activeEditorId);
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!resizingEditors) return;
+            resizingEditors = false;
+            document.body.classList.remove('resizing-vertical');
+            localStorage.setItem(STORAGE_KEYS.editorHeight, Math.round(editorHeight));
+            refreshEditorAfterLayout(activeEditorId);
+        });
+    }
+
+    if (sidebarResizer && controlsPanel) {
+        let resizingSidebar = false;
+        let startX = 0;
+        let startWidth = controlsPanel.offsetWidth;
+
+        sidebarResizer.addEventListener('mousedown', event => {
+            event.preventDefault();
+            resizingSidebar = true;
+            startX = event.clientX;
+            startWidth = controlsPanel.offsetWidth;
+            document.body.classList.add('resizing-horizontal');
+        });
+
+        window.addEventListener('mousemove', event => {
+            if (!resizingSidebar) return;
+            const delta = event.clientX - startX;
+            const nextWidth = clampNumber(startWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+            controlsPanel.style.width = `${nextWidth}px`;
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!resizingSidebar) return;
+            resizingSidebar = false;
+            document.body.classList.remove('resizing-horizontal');
+            const storedWidth = clampNumber(Math.round(controlsPanel.offsetWidth), MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+            localStorage.setItem(STORAGE_KEYS.sidebarWidth, storedWidth);
+            drawGrid();
+        });
+    }
+
+    if (editorTabs.length) {
+        setActiveEditor(activeEditorId);
+    }
 
     const positiveColorStops = [
         { stop: 0, rgb: [255, 250, 165] },
@@ -336,6 +653,20 @@ document.addEventListener('DOMContentLoaded', () => {
         { stop: 0.66, rgb: [50, 136, 189] },
         { stop: 1, rgb: [3, 52, 118] },
     ];
+
+    const createStatsTracker = () => ({ min: Infinity, max: -Infinity, count: 0 });
+    const resetStatsTracker = (tracker) => {
+        tracker.min = Infinity;
+        tracker.max = -Infinity;
+        tracker.count = 0;
+        return tracker;
+    };
+    const trackStatsValue = (tracker, value) => {
+        if (!tracker || !Number.isFinite(value)) return;
+        tracker.min = Math.min(tracker.min, value);
+        tracker.max = Math.max(tracker.max, value);
+        tracker.count += 1;
+    };
 
     const clamp01 = (value) => Math.min(Math.max(value, 0), 1);
     const sampleColorStops = (stops, ratio) => {
@@ -473,6 +804,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (window.CodeMirror) {
+        const applySizing = (editor) => {
+            if (!editor) return;
+            editor.setSize(null, '100%');
+        };
+
         codeEditors.propagationLogic = CodeMirror.fromTextArea(controls.propagationLogic, {
             mode: 'javascript',
             theme: 'darcula',
@@ -481,6 +817,9 @@ document.addEventListener('DOMContentLoaded', () => {
             autoCloseBrackets: true,
             styleActiveLine: true,
         });
+        applySizing(codeEditors.propagationLogic);
+        codeEditors.propagationLogic.on('change', scheduleRun);
+
         codeEditors.colorLogic = CodeMirror.fromTextArea(controls.colorLogic, {
             mode: 'javascript',
             theme: 'darcula',
@@ -489,8 +828,9 @@ document.addEventListener('DOMContentLoaded', () => {
             autoCloseBrackets: true,
             styleActiveLine: true,
         });
-        codeEditors.propagationLogic.on('change', scheduleRun);
+        applySizing(codeEditors.colorLogic);
         codeEditors.colorLogic.on('change', scheduleRun);
+
         codeEditors.hdrLogic = CodeMirror.fromTextArea(controls.hdrLogic, {
             mode: 'javascript',
             theme: 'darcula',
@@ -499,7 +839,12 @@ document.addEventListener('DOMContentLoaded', () => {
             autoCloseBrackets: true,
             styleActiveLine: true,
         });
+        applySizing(codeEditors.hdrLogic);
         codeEditors.hdrLogic.on('change', scheduleRun);
+
+        if (editorTabs.length) {
+            setActiveEditor(activeEditorId);
+        }
     } else {
         controls.propagationLogic.addEventListener('input', scheduleRun);
         controls.colorLogic.addEventListener('input', scheduleRun);
@@ -558,7 +903,6 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.scale(view.scale, view.scale);
 
         const stats = computeGridStats();
-        const gradientRange = resolveGradientRange(stats);
         const nodeRadius = getNodeRadius();
         const selectionWidth = getSelectionWidth();
         const edgeWidth = getEdgeWidth();
@@ -576,7 +920,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return defaultHdrFunction(input, hdrContext);
         };
-        const colorContext = { scale: view.scale, applyHDR, clusterSize: 1 };
+        const colorContext = { scale: view.scale, applyHDR, clusterSize: 1, visibleStats: null, gradientRange: null };
 
         const padding = nodeRadius + VIEW_CULL_PADDING;
         const halfWidth = canvas.width / 2;
@@ -593,6 +937,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const visibleNodes = new Map();
         const aggregatedBuckets = new Map();
 
+        const valueStatsTracker = createStatsTracker();
+        const renderStatsTracker = createStatsTracker();
+
         const bucketWorldSize = shouldAggregate
             ? Math.max(AGGREGATION_BUCKET_PIXELS / safeScale, nodeRadius * 2)
             : 0;
@@ -600,6 +947,8 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const [key, node] of grid.entries()) {
             const [x, y] = key.split(',').map(Number);
             if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
+
+            trackStatsValue(valueStatsTracker, node.value);
 
             if (shouldAggregate) {
                 const bucketX = Math.round(x / bucketWorldSize);
@@ -618,6 +967,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 bucket.minValue = Math.min(bucket.minValue, node.value);
             } else {
                 visibleNodes.set(key, { node, x, y });
+                trackStatsValue(renderStatsTracker, node.value);
             }
         }
 
@@ -637,17 +987,35 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        let visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
+        let gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
+        colorContext.visibleStats = visibleStatsForRange;
+        colorContext.gradientRange = gradientRange;
+
         if (shouldAggregate) {
+            resetStatsTracker(renderStatsTracker);
             for (const bucket of aggregatedBuckets.values()) {
-                const avgX = bucket.xSum / bucket.count;
-                const avgY = bucket.ySum / bucket.count;
+                if (!bucket.count) continue;
                 const averageValue = bucket.valueSum / bucket.count;
                 const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
                 const blend = Math.min(0.7, bucket.count / 12);
                 const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
+                bucket.displayValue = displayValue;
+                trackStatsValue(renderStatsTracker, displayValue);
+            }
+            visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
+            gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
+            colorContext.visibleStats = visibleStatsForRange;
+            colorContext.gradientRange = gradientRange;
+
+            for (const bucket of aggregatedBuckets.values()) {
+                if (!bucket.count) continue;
+                const avgX = bucket.xSum / bucket.count;
+                const avgY = bucket.ySum / bucket.count;
                 const sizeBoost = Math.min(3, Math.sqrt(bucket.count));
                 const adjustedRadius = Math.max(nodeRadius, nodeRadius * sizeBoost);
                 colorContext.clusterSize = bucket.count;
+                const displayValue = bucket.displayValue ?? (bucket.valueSum / bucket.count);
                 ctx.fillStyle = getNodeColor(displayValue, stats, gradientRange, colorContext);
                 ctx.beginPath();
                 ctx.arc(avgX, avgY, adjustedRadius, 0, 2 * Math.PI);
@@ -700,30 +1068,68 @@ document.addEventListener('DOMContentLoaded', () => {
         return { min, max };
     }
 
-    function resolveGradientRange(stats) {
-        const safeMin = Number.isFinite(stats.min) ? stats.min : 0;
-        const safeMax = Number.isFinite(stats.max) ? stats.max : 0;
+    function resolveGradientRange(globalStats, viewStats, viewState) {
+        const fallbackMin = (globalStats && Number.isFinite(globalStats.min)) ? globalStats.min : 0;
+        const fallbackMax = (globalStats && Number.isFinite(globalStats.max)) ? globalStats.max : 0;
+        const hasViewSamples = viewStats && Number.isFinite(viewStats.min) && Number.isFinite(viewStats.max) && viewStats.count > 0;
+
+        let blend = 0;
+        if (hasViewSamples) {
+            const countFactor = clampNumber(viewStats.count / 40, 0, 1);
+            const scaleFactor = (viewState && Number.isFinite(viewState.scale))
+                ? clampNumber(Math.log10(viewState.scale + 1) / 1.6, 0, 1)
+                : 0.2;
+            blend = clampNumber(0.2 + countFactor * 0.6 + scaleFactor * 0.2, 0, 1);
+        }
+
+        const mixValue = (viewValue, fallbackValue) => {
+            if (!hasViewSamples) return fallbackValue;
+            return viewValue * blend + fallbackValue * (1 - blend);
+        };
+
+        const padRange = (minValue, maxValue) => {
+            if (minValue === maxValue) {
+                const padding = Math.max(Math.abs(minValue) * 0.25, 0.5);
+                return { min: minValue - padding, max: maxValue + padding };
+            }
+            const span = maxValue - minValue;
+            const padding = span * 0.08 || 0.5;
+            return { min: minValue - padding, max: maxValue + padding };
+        };
+
         switch (config.gradientMode) {
             case 'positive': {
-                const maxPositive = safeMax > 0 ? safeMax : 1;
-                return { min: 0, max: maxPositive };
+                const viewMax = hasViewSamples ? Math.max(0, viewStats.max) : 0;
+                const fallbackPositive = fallbackMax > 0 ? fallbackMax : 1;
+                const resolvedMax = mixValue(Math.max(viewMax, 0), Math.max(fallbackPositive, 1));
+                return padRange(0, resolvedMax);
             }
             case 'negative': {
-                const minNegative = safeMin < 0 ? safeMin : -1;
-                return { min: minNegative, max: 0 };
+                const viewMin = hasViewSamples ? Math.min(0, viewStats.min) : 0;
+                const fallbackNegative = fallbackMin < 0 ? fallbackMin : -1;
+                const resolvedMin = mixValue(Math.min(viewMin, 0), Math.min(fallbackNegative, -1));
+                return padRange(resolvedMin, 0);
             }
             case 'custom': {
-                if (!config.gradientCustom) return { min: -1, max: 1 };
-                const { min, max } = config.gradientCustom;
-                if (min === max) {
-                    return { min: min - 0.5, max: max + 0.5 };
+                if (!config.gradientCustom) return padRange(-1, 1);
+                let { min, max } = config.gradientCustom;
+                if (!Number.isFinite(min) || !Number.isFinite(max)) {
+                    min = fallbackMin;
+                    max = fallbackMax;
                 }
-                return config.gradientCustom;
+                if (min === max) {
+                    return padRange(min, max);
+                }
+                return { min, max };
             }
             case 'symmetric':
             default: {
-                const maxAbs = Math.max(Math.abs(safeMin), Math.abs(safeMax), 1);
-                return { min: -maxAbs, max: maxAbs };
+                const globalAbs = Math.max(Math.abs(fallbackMin), Math.abs(fallbackMax), 1);
+                const viewAbs = hasViewSamples
+                    ? Math.max(Math.abs(viewStats.min), Math.abs(viewStats.max), 0)
+                    : globalAbs;
+                const resolvedAbs = mixValue(viewAbs, globalAbs);
+                return padRange(-resolvedAbs, resolvedAbs);
             }
         }
     }
