@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Grid Propagation Simulator</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1d;
+            --panel-bg: #2c2c34;
+            --text-color: #f0f0f0;
+            --primary-color: #4c82f7;
+            --border-color: #444;
+            --input-bg: #3a3a44;
+            --error-color: #e57373;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            height: 100vh;
+        }
+
+        #main-container {
+            display: flex;
+            flex-grow: 1;
+        }
+
+        #controls {
+            width: 380px;
+            padding: 15px;
+            background-color: var(--panel-bg);
+            border-right: 2px solid var(--border-color);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            background-color: var(--bg-color);
+            cursor: grab;
+        }
+        #canvas-container:active { cursor: grabbing; }
+
+        #gridCanvas { 
+            display: block; 
+            width: 100%;
+            height: 100%;        
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .control-group h3 {
+            margin-top: 0;
+            font-size: 1em;
+            color: var(--primary-color);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+        }
+        
+        label { display: block; margin-bottom: 5px; font-size: 0.9em; }
+
+        input, select, textarea, button {
+            width: 100%;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            box-sizing: border-box;
+            margin-bottom: 10px;
+        }
+        
+        textarea { font-family: "Courier New", monospace; resize: vertical; }
+        #propagationLogic { height: 120px; }
+
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: #6a9eff; }
+
+        .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        .storage-buttons { display: flex; gap: 10px; }
+        #deleteProjectBtn { background-color: #c94c4c; }
+        #deleteProjectBtn:hover { background-color: #e06c6c; }
+
+        #inspector-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(44, 44, 52, 0.9);
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            padding: 15px;
+            color: var(--text-color);
+            font-size: 0.9em;
+            display: none; /* Hidden by default */
+            width: 250px;
+            pointer-events: none; /* So it doesn't block clicks */
+        }
+        #inspector-panel .close-btn {
+            position: absolute;
+            top: 5px; right: 8px;
+            cursor: pointer; font-weight: bold;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="main-container">
+        <div id="controls">
+            <h2>Propagation Controls</h2>
+            
+            <div class="control-group">
+                <h3>Simulation Core</h3>
+                <label for="generations">Generations</label>
+                <input type="number" id="generations" value="10" min="1" max="50">
+                <label for="reunification">Reunification Logic</label>
+                <select id="reunification">
+                    <option value="sum" selected>Sum</option>
+                    <option value="average">Average</option>
+                    <option value="max">Maximum</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <h3>Propagation Rules</h3>
+                <label for="moves">Move Vectors [dx, dy]</label>
+                <textarea id="moves">[[1, -1], [1, 1]]</textarea>
+                <label for="propagationLogic">Propagation Function(parentValue, index, move)</label>
+                <textarea id="propagationLogic">// 'Left' branch (index 0) gains value, 'right' loses.
+if (index === 0) {
+    return parentValue + 0.2;
+} else {
+    return parentValue - 0.3;
+}</textarea>
+            </div>
+            
+            <div class="control-group">
+                <h3>Presets</h3>
+                <div class="button-grid">
+                    <button id="presetPascal">Pascal</button>
+                    <button id="presetDivergent">Divergent</button>
+                    <button id="presetBackwards">Echo</button>
+                    <button id="presetDecay">Decay</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <h3>Projects (Local Storage)</h3>
+                <input type="text" id="projectName" placeholder="My Divergent Model">
+                <div class="storage-buttons">
+                    <button id="saveProjectBtn">Save</button>
+                    <button id="deleteProjectBtn">Delete</button>
+                </div>
+                <select id="loadProjectSelect"></select>
+            </div>
+        </div>
+
+        <div id="canvas-container">
+            <canvas id="gridCanvas"></canvas>
+            <div id="inspector-panel">
+                <span class="close-btn" id="inspector-close-btn">&times;</span>
+                <h4>Node Inspector</h4>
+                <p><strong>Coords:</strong> <span id="inspector-coords"></span></p>
+                <p><strong>Value:</strong> <span id="inspector-value"></span></p>
+                <p><strong>Generation:</strong> <span id="inspector-gen"></span></p>
+                <p><strong>Parents:</strong> <span id="inspector-parents"></span></p>
+            </div>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('gridCanvas');
+    const ctx = canvas.getContext('2d');
+    const inspectorPanel = document.getElementById('inspector-panel');
+    const controls = {
+        generations: document.getElementById('generations'),
+        reunification: document.getElementById('reunification'),
+        moves: document.getElementById('moves'),
+        propagationLogic: document.getElementById('propagationLogic'),
+        projectName: document.getElementById('projectName'),
+        saveProjectBtn: document.getElementById('saveProjectBtn'),
+        deleteProjectBtn: document.getElementById('deleteProjectBtn'),
+        loadProjectSelect: document.getElementById('loadProjectSelect'),
+        presetPascal: document.getElementById('presetPascal'),
+        presetDivergent: document.getElementById('presetDivergent'),
+        presetBackwards: document.getElementById('presetBackwards'),
+        presetDecay: document.getElementById('presetDecay'),
+        inspectorCloseBtn: document.getElementById('inspector-close-btn'),
+    };
+
+    let config = {};
+    let grid = new Map();
+    let selectedNodeKey = null;
+    let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
+
+    function generateGrid() {
+        grid.clear();
+        selectedNodeKey = null;
+        const startNodeKey = "0,0";
+        grid.set(startNodeKey, { value: 1.0, gen: 0, parents: [] });
+        let frontier = new Set([startNodeKey]);
+
+        for (let i = 0; i < config.generations; i++) {
+            const nextFrontier = new Set();
+            const contributions = new Map();
+            for (const nodeKey of frontier) {
+                const node = grid.get(nodeKey);
+                if (!node) continue;
+                const [x, y] = nodeKey.split(',').map(Number);
+                
+                config.moves.forEach((move, index) => {
+                    const valueToPass = config.propagate(node.value, index, move);
+                    const childX = x + move[0];
+                    const childY = y + move[1];
+                    const childKey = `${childX},${childY}`;
+                    if (!contributions.has(childKey)) contributions.set(childKey, []);
+                    contributions.get(childKey).push({value: valueToPass, parentKey: nodeKey});
+                });
+            }
+            for (const [childKey, incoming] of contributions.entries()) {
+                const incomingValues = incoming.map(c => c.value);
+                let finalValue = 0;
+                switch (config.reunification) {
+                    case 'sum': finalValue = incomingValues.reduce((a, b) => a + b, 0); break;
+                    case 'average': finalValue = incomingValues.reduce((a, b) => a + b, 0) / incomingValues.length; break;
+                    case 'max': finalValue = Math.max(...incomingValues); break;
+                }
+                if (grid.has(childKey)) {
+                    grid.get(childKey).value += finalValue;
+                } else {
+                    grid.set(childKey, { value: finalValue, gen: i + 1, parents: incoming.map(c => c.parentKey) });
+                }
+                nextFrontier.add(childKey);
+            }
+            frontier = nextFrontier;
+        }
+    }
+
+    function drawGrid() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.translate(canvas.width / 2 + view.offsetX, canvas.height / 2 + view.offsetY);
+        ctx.scale(view.scale, view.scale);
+
+        let maxAbsVal = 0;
+        for (const node of grid.values()) maxAbsVal = Math.max(maxAbsVal, Math.abs(node.value));
+
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 0.05;
+        for (const [key, node] of grid.entries()) {
+             const [x1, y1] = key.split(',').map(Number);
+             node.parents.forEach(parentKey => {
+                if (grid.has(parentKey)) {
+                   const [x0, y0] = parentKey.split(',').map(Number);
+                   ctx.beginPath();
+                   ctx.moveTo(x0, y0);
+                   ctx.lineTo(x1, y1);
+                   ctx.stroke();
+                }
+            });
+        }
+
+        for (const [key, node] of grid.entries()) {
+            const [x, y] = key.split(',').map(Number);
+            ctx.fillStyle = getDivergentColor(node.value, maxAbsVal);
+            ctx.beginPath();
+            ctx.arc(x, y, 0.2, 0, 2 * Math.PI);
+            ctx.fill();
+            if (key === selectedNodeKey) {
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 0.1;
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
+    function getDivergentColor(value, maxAbsValue) {
+        if (maxAbsValue === 0) return '#FFFFFF';
+        const ratio = Math.min(Math.abs(value) / maxAbsValue, 1);
+        if (value > 1e-6) return `hsl(0, ${90 * ratio}%, 60%)`; // Red for positive
+        if (value < -1e-6) return `hsl(220, ${90 * ratio}%, 60%)`; // Blue for negative
+        return '#FFFFFF'; // White for zero
+    }
+    
+    function updateConfigFromUI() {
+        try {
+            config = {
+                generations: parseInt(controls.generations.value, 10),
+                reunification: controls.reunification.value,
+                moves: JSON.parse(controls.moves.value),
+                propagate: new Function('parentValue', 'index', 'move', `return (() => { ${controls.propagationLogic.value} })();`),
+            };
+            controls.moves.style.borderColor = '';
+            controls.propagationLogic.style.borderColor = '';
+            return true;
+        } catch (e) {
+            if (e.message.includes('JSON')) controls.moves.style.borderColor = 'var(--error-color)';
+            else controls.propagationLogic.style.borderColor = 'var(--error-color)';
+            return false;
+        }
+    }
+    
+    function updateUIFromConfig() {
+        controls.generations.value = config.generations;
+        controls.reunification.value = config.reunification;
+        controls.moves.value = JSON.stringify(config.moves, null, 2);
+        const funcString = config.propagate.toString();
+        controls.propagationLogic.value = funcString.substring(funcString.indexOf('{') + 1, funcString.lastIndexOf('}')).trim();
+    }
+
+    function run() {
+        if (updateConfigFromUI()) {
+            generateGrid();
+            drawGrid();
+            inspectorPanel.style.display = 'none';
+        }
+    }
+    
+    function findNodeAt(mouseX, mouseY) {
+        const rect = canvas.getBoundingClientRect();
+        const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / view.scale;
+        const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / view.scale;
+        for (const [key, node] of grid.entries()) {
+            const [nodeX, nodeY] = key.split(',').map(Number);
+            if (Math.sqrt((gridX - nodeX)**2 + (gridY - nodeY)**2) < 0.3) return key;
+        }
+        return null;
+    }
+
+    function updateInspectorPanel(nodeKey) {
+        if (!nodeKey || !grid.has(nodeKey)) {
+            inspectorPanel.style.display = 'none';
+            return;
+        }
+        const node = grid.get(nodeKey);
+        document.getElementById('inspector-coords').textContent = `(${nodeKey})`;
+        document.getElementById('inspector-value').textContent = node.value.toFixed(4);
+        document.getElementById('inspector-gen').textContent = node.gen;
+        document.getElementById('inspector-parents').textContent = node.parents.join(' | ') || 'None';
+        inspectorPanel.style.display = 'block';
+    }
+
+    function saveProject() {
+        const name = controls.projectName.value.trim();
+        if (!name) { alert('Please enter a project name.'); return; }
+        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+        projects[name] = {
+            generations: config.generations,
+            reunification: config.reunification,
+            moves: config.moves,
+            logic: controls.propagationLogic.value,
+        };
+        localStorage.setItem('gridSimProjects', JSON.stringify(projects));
+        updateProjectList();
+    }
+
+    function loadProject() {
+        const name = controls.loadProjectSelect.value;
+        if (!name) return;
+        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+        if (projects[name]) {
+            const proj = projects[name];
+            controls.generations.value = proj.generations;
+            controls.reunification.value = proj.reunification;
+            controls.moves.value = JSON.stringify(proj.moves, null, 2);
+            controls.propagationLogic.value = proj.logic;
+            controls.projectName.value = name;
+            run();
+        }
+    }
+
+    function deleteProject() {
+        const name = controls.loadProjectSelect.value;
+        if (!name || !confirm(`Delete project "${name}"?`)) return;
+        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+        delete projects[name];
+        localStorage.setItem('gridSimProjects', JSON.stringify(projects));
+        controls.projectName.value = "";
+        updateProjectList();
+    }
+
+    function updateProjectList() {
+        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+        const currentSelection = controls.loadProjectSelect.value;
+        controls.loadProjectSelect.innerHTML = '<option value="">-- Load Project --</option>';
+        for (const name in projects) {
+            const option = document.createElement('option');
+            option.value = name; option.textContent = name;
+            controls.loadProjectSelect.appendChild(option);
+        }
+        controls.loadProjectSelect.value = currentSelection;
+    }
+    
+    const presets = {
+        pascal: { moves: `[[1, -1], [1, 1]]`, logic: `return parentValue;` },
+        divergent: { moves: `[[1, -1], [1, 1]]`, logic: `if (index === 0) return parentValue + 0.2;\nelse return parentValue - 0.3;` },
+        backwards: { moves: `[[1, -1], [1, 1], [-2, 0]]`, logic: `if(index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;` },
+        decay: { moves: `[[1, -1], [1, 1]]`, logic: `return parentValue * 0.8;` },
+    };
+
+    function loadPreset(preset) {
+        controls.moves.value = preset.moves;
+        controls.propagationLogic.value = preset.logic;
+        run();
+    }
+
+    // --- Event Listeners ---
+    ['generations', 'reunification', 'moves', 'propagationLogic'].forEach(id => {
+        document.getElementById(id).addEventListener('input', run);
+    });
+
+    controls.saveProjectBtn.onclick = saveProject;
+    controls.loadProjectSelect.onchange = loadProject;
+    controls.deleteProjectBtn.onclick = deleteProject;
+    controls.presetPascal.onclick = () => loadPreset(presets.pascal);
+    controls.presetDivergent.onclick = () => loadPreset(presets.divergent);
+    controls.presetBackwards.onclick = () => loadPreset(presets.backwards);
+    controls.presetDecay.onclick = () => loadPreset(presets.decay);
+    controls.inspectorCloseBtn.onclick = () => { inspectorPanel.style.display = 'none'; selectedNodeKey = null; drawGrid(); };
+    
+    canvas.addEventListener('mousedown', e => { view.isDragging = true; view.lastX = e.clientX; view.lastY = e.clientY; });
+    canvas.addEventListener('mouseup', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
+    canvas.addEventListener('mouseleave', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
+    canvas.addEventListener('mousemove', e => {
+        if (!view.isDragging) return;
+        canvas.style.cursor = 'grabbing';
+        view.offsetX += e.clientX - view.lastX;
+        view.offsetY += e.clientY - view.lastY;
+        view.lastX = e.clientX;
+        view.lastY = e.clientY;
+        drawGrid();
+    });
+    canvas.addEventListener('wheel', e => {
+        e.preventDefault();
+        const scaleAmount = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        view.scale *= scaleAmount;
+        drawGrid();
+    });
+    canvas.addEventListener('click', e => {
+        if (Math.abs(e.clientX - view.lastX) < 3 && Math.abs(e.clientY - view.lastY) < 3) {
+            selectedNodeKey = findNodeAt(e.clientX, e.clientY);
+            updateInspectorPanel(selectedNodeKey);
+            drawGrid();
+        }
+    });
+
+    // --- Initial Load ---
+    updateProjectList();
+    run();
+});
+</script>
+
+</body>
+</html>
