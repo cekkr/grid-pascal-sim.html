@@ -707,6 +707,154 @@ class Debouncer {
     }
 }
 
+const GRID_WORKER_SUPPORTED = typeof Worker !== 'undefined';
+const GRID_WORKER_URL = 'grid-compute-worker.js';
+const GRID_WORKER_IDLE_TIMEOUT_MS = 120000;
+
+class GridWorkerBridge {
+    constructor({ url = GRID_WORKER_URL, onResult = null, onError = null } = {}) {
+        this.url = url;
+        this.onResult = onResult;
+        this.onError = onError;
+        this.worker = null;
+        this.pending = new Map();
+        this.idCounter = 0;
+        this.idleTimer = null;
+        this.disposed = false;
+    }
+
+    ensureWorker() {
+        if (this.disposed) return null;
+        if (!GRID_WORKER_SUPPORTED) return null;
+        if (this.worker) return this.worker;
+        try {
+            this.worker = new Worker(this.url, { name: 'grid-compute-worker' });
+            this.worker.onmessage = (event) => this.handleMessage(event);
+            this.worker.onerror = (event) => this.handleError(event);
+            return this.worker;
+        } catch (error) {
+            this.worker = null;
+            console.warn('Failed to initialise grid worker', error);
+            if (typeof this.onError === 'function') {
+                this.onError(null, error);
+            }
+            return null;
+        }
+    }
+
+    handleMessage(event) {
+        const data = event.data || {};
+        const requestId = data.requestId;
+        if (data.type === 'result') {
+            this.resolveRequest(requestId, data.result);
+            if (typeof this.onResult === 'function') {
+                this.onResult(requestId, data.result);
+            }
+            this.scheduleIdleTermination();
+            return;
+        }
+        if (data.type === 'error') {
+            const error = new Error(data.error?.message || 'Grid worker error');
+            if (data.error?.stack) error.stack = data.error.stack;
+            this.rejectRequest(requestId, error);
+            if (typeof this.onError === 'function') {
+                this.onError(requestId, error);
+            }
+            this.scheduleIdleTermination();
+        }
+    }
+
+    handleError(event) {
+        const error = event instanceof ErrorEvent
+            ? event.error || new Error(event.message || 'Grid worker runtime error')
+            : new Error('Grid worker runtime error');
+        this.rejectAll(error);
+        if (typeof this.onError === 'function') {
+            this.onError(null, error);
+        }
+        this.terminate();
+    }
+
+    compute(payload) {
+        const worker = this.ensureWorker();
+        if (!worker) {
+            return Promise.reject(new Error('Grid worker unavailable'));
+        }
+        const requestId = `${Date.now()}-${++this.idCounter}`;
+        return new Promise((resolve, reject) => {
+            this.pending.set(requestId, { resolve, reject });
+            try {
+                worker.postMessage({ type: 'compute', requestId, payload });
+                if (this.idleTimer) {
+                    clearTimeout(this.idleTimer);
+                    this.idleTimer = null;
+                }
+            } catch (error) {
+                this.pending.delete(requestId);
+                reject(error);
+                if (typeof this.onError === 'function') {
+                    this.onError(requestId, error);
+                }
+            }
+        });
+    }
+
+    resolveRequest(requestId, result) {
+        if (!requestId || !this.pending.has(requestId)) return;
+        const entry = this.pending.get(requestId);
+        this.pending.delete(requestId);
+        if (entry && typeof entry.resolve === 'function') {
+            entry.resolve(result);
+        }
+    }
+
+    rejectRequest(requestId, error) {
+        if (!requestId || !this.pending.has(requestId)) return;
+        const entry = this.pending.get(requestId);
+        this.pending.delete(requestId);
+        if (entry && typeof entry.reject === 'function') {
+            entry.reject(error);
+        }
+    }
+
+    rejectAll(error) {
+        this.pending.forEach((entry) => {
+            if (entry && typeof entry.reject === 'function') {
+                entry.reject(error);
+            }
+        });
+        this.pending.clear();
+    }
+
+    scheduleIdleTermination() {
+        if (this.idleTimer) {
+            clearTimeout(this.idleTimer);
+        }
+        this.idleTimer = setTimeout(() => this.terminate(), GRID_WORKER_IDLE_TIMEOUT_MS);
+    }
+
+    terminate() {
+        if (this.worker) {
+            try {
+                this.worker.terminate();
+            } catch (error) {
+                console.warn('Failed to terminate grid worker cleanly', error);
+            }
+            this.worker = null;
+        }
+        if (this.idleTimer) {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+        }
+    }
+
+    dispose() {
+        this.disposed = true;
+        this.terminate();
+        this.pending.clear();
+    }
+}
+
 class GridSimulatorApp {
     constructor(document) {
 
@@ -1183,6 +1331,23 @@ class GridSimulatorApp {
         this.grid = grid;
         this.selectedNodeKey = selectedNodeKey;
         this.view = view;
+        const aggregationCache = new Map();
+        this.aggregationCache = aggregationCache;
+        const projection = {
+            mode: 'planar',
+            rotation: Math.PI / 4,
+            tilt: Math.PI / 5,
+            scaleZ: 0.6,
+        };
+        this.projection = projection;
+        this.cachedStats = { min: 0, max: 0 };
+        this.isComputing = false;
+        this.pendingComputePayload = null;
+        const workerBridge = GRID_WORKER_SUPPORTED ? new GridWorkerBridge() : null;
+        this.workerBridge = workerBridge;
+        if (workerBridge && typeof window !== 'undefined') {
+            window.addEventListener('beforeunload', () => workerBridge.dispose());
+        }
 
         const MIN_PIXEL_NODE_RADIUS = 3;
         const MIN_PIXEL_EDGE_WIDTH = 0.6;
@@ -1344,6 +1509,26 @@ class GridSimulatorApp {
                 merged.sampleComplete = false;
             }
             return merged;
+        }
+
+        function computeNodePositionOverride(key, coords, context = {}) {
+            if (typeof config.positionFn !== 'function') return null;
+            try {
+                const result = config.positionFn(key, coords, context);
+                if (result && typeof result === 'object') {
+                    const x = Number(result.x);
+                    const y = Number(result.y);
+                    const z = Number(result.z);
+                    return {
+                        x: Number.isFinite(x) ? x : coords.x,
+                        y: Number.isFinite(y) ? y : coords.y,
+                        z: Number.isFinite(z) ? z : 0,
+                    };
+                }
+            } catch (error) {
+                console.warn('Position logic error', error);
+            }
+            return null;
         }
 
         function prepareBinaryInfo(nodeKey) {
@@ -1962,7 +2147,7 @@ class GridSimulatorApp {
             }
         }
 
-        function generateGrid() {
+        function generateGridSync() {
             grid.clear();
             selectedNodeKey = null;
             app.selectedNodeKey = selectedNodeKey;
@@ -1973,6 +2158,11 @@ class GridSimulatorApp {
                 generation: 0,
                 phase: 'seed',
             });
+            const rootBaseCoords = { x: 0, y: 0, z: 0 };
+            const rootPositionOverride = computeNodePositionOverride(startNodeKey, rootBaseCoords, {
+                generation: 0,
+                phase: 'seed',
+            });
             grid.set(startNodeKey, {
                 value: rootValue,
                 dimensions: rootDimensions,
@@ -1980,6 +2170,7 @@ class GridSimulatorApp {
                 parents: [],
                 children: [],
                 pathMeta: binaryEnumerationSupported ? createRootPathMeta() : null,
+                position: rootPositionOverride || rootBaseCoords,
             });
             let frontier = new Set([startNodeKey]);
 
@@ -2074,6 +2265,12 @@ class GridSimulatorApp {
                             childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
                         }
                     } else {
+                        const baseCoords = { x: childX, y: childY, z: 0 };
+                        const customPosition = computeNodePositionOverride(childKey, baseCoords, {
+                            generation: generationIndex + 1,
+                            parents: parentKeys,
+                            phase: 'forward',
+                        });
                         grid.set(childKey, {
                             value: effectiveValue,
                             dimensions: childDimensions,
@@ -2081,6 +2278,7 @@ class GridSimulatorApp {
                             parents: parentKeys,
                             children: [],
                             pathMeta: binaryEnumerationSupported ? childPathMeta : null,
+                            position: customPosition || baseCoords,
                         });
                     }
 
@@ -2093,6 +2291,208 @@ class GridSimulatorApp {
             if (config.backpropSteps > 0 && typeof config.backpropFn === 'function') {
                 applyBackpropagation(config.backpropSteps);
             }
+
+            app.cachedStats = computeGridStats(true);
+            resetViewCaches();
+        }
+
+        function applyGridPayload(payload) {
+            grid.clear();
+            selectedNodeKey = null;
+            app.selectedNodeKey = selectedNodeKey;
+
+            if (!payload || !Array.isArray(payload.nodes)) {
+                binaryEnumerationSupported = Boolean(payload?.binaryEnumerationSupported);
+                app.binaryEnumerationSupported = binaryEnumerationSupported;
+                config.binaryEnumerationSupported = binaryEnumerationSupported;
+                app.cachedStats = { min: 0, max: 0 };
+                resetViewCaches();
+                return;
+            }
+
+            payload.nodes.forEach((record) => {
+                if (!record || typeof record.key !== 'string') return;
+                const positionSource = (record.position && typeof record.position === 'object')
+                    ? {
+                        x: Number.isFinite(record.position.x) ? record.position.x : Number(record.position.x) || 0,
+                        y: Number.isFinite(record.position.y) ? record.position.y : Number(record.position.y) || 0,
+                        z: Number.isFinite(record.position.z) ? record.position.z : Number(record.position.z) || 0,
+                    }
+                    : null;
+                const fallbackPosition = (() => {
+                    const [px, py] = record.key.split(',').map(Number);
+                    return { x: Number.isFinite(px) ? px : 0, y: Number.isFinite(py) ? py : 0, z: 0 };
+                })();
+                grid.set(record.key, {
+                    value: Number.isFinite(record.value) ? record.value : 0,
+                    dimensions: record.dimensions && typeof record.dimensions === 'object' ? record.dimensions : {},
+                    gen: Number.isFinite(record.gen) ? record.gen : 0,
+                    parents: Array.isArray(record.parents) ? record.parents.slice() : [],
+                    children: Array.isArray(record.children) ? record.children.slice() : [],
+                    pathMeta: record.pathMeta || null,
+                    position: positionSource || fallbackPosition,
+                });
+            });
+
+            binaryEnumerationSupported = Boolean(payload.binaryEnumerationSupported);
+            app.binaryEnumerationSupported = binaryEnumerationSupported;
+            config.binaryEnumerationSupported = binaryEnumerationSupported;
+
+            if (payload.stats && Number.isFinite(payload.stats.min) && Number.isFinite(payload.stats.max)) {
+                app.cachedStats = { min: payload.stats.min, max: payload.stats.max };
+            } else {
+                app.cachedStats = computeGridStats(true);
+            }
+            resetViewCaches();
+        }
+
+        function resetViewCaches() {
+            aggregationCache.clear();
+        }
+
+        function setPositionLogic(source, options = {}) {
+            const autoRun = options.autoRun !== false;
+            const nextSource = typeof source === 'string' ? source : '';
+            let compiled = null;
+            if (nextSource) {
+                try {
+                    compiled = new Function('key', 'coords', 'context', `return (() => { ${nextSource} })();`);
+                    const probe = compiled('0,0', { x: 0, y: 0, z: 0 }, { generation: 0, phase: 'probe' });
+                    if (probe && typeof probe === 'object') {
+                        // Validate numbers if provided; fall through otherwise.
+                    }
+                } catch (error) {
+                    console.warn('Failed to compile position logic', error);
+                    return false;
+                }
+            }
+
+            config.positionSource = nextSource;
+            config.positionFn = compiled;
+            if (config.workerPayload) {
+                config.workerPayload.positionSource = nextSource;
+            }
+            resetViewCaches();
+            if (autoRun) {
+                scheduleRunImmediate();
+            }
+            return true;
+        }
+
+        function setProjectionMode(mode, overrides = {}) {
+            const normalized = typeof mode === 'string' ? mode.toLowerCase() : 'planar';
+            if (normalized === 'planar' || normalized === 'isometric') {
+                projection.mode = normalized;
+            }
+            if (overrides && typeof overrides === 'object') {
+                if (Number.isFinite(overrides.rotation)) {
+                    projection.rotation = overrides.rotation;
+                }
+                if (Number.isFinite(overrides.tilt)) {
+                    projection.tilt = overrides.tilt;
+                }
+                if (Number.isFinite(overrides.scaleZ)) {
+                    projection.scaleZ = overrides.scaleZ;
+                }
+            }
+            resetViewCaches();
+            drawGrid();
+            return projection.mode;
+        }
+
+        function resolvePositionFromKey(key) {
+            const [rawX, rawY] = typeof key === 'string' ? key.split(',').map(Number) : [0, 0];
+            const x = Number.isFinite(rawX) ? rawX : 0;
+            const y = Number.isFinite(rawY) ? rawY : 0;
+            return { x, y, z: 0 };
+        }
+
+        function getNodePosition(node, key) {
+            if (node && node.position && Number.isFinite(node.position.x) && Number.isFinite(node.position.y)) {
+                const z = Number.isFinite(node.position.z) ? node.position.z : 0;
+                return { x: node.position.x, y: node.position.y, z };
+            }
+            return resolvePositionFromKey(key);
+        }
+
+        function projectPosition(position) {
+            if (!position) return { x: 0, y: 0, depth: 0 };
+            const mode = projection.mode;
+            if (mode === 'isometric') {
+                const rotation = Number.isFinite(projection.rotation) ? projection.rotation : Math.PI / 4;
+                const tilt = Number.isFinite(projection.tilt) ? projection.tilt : Math.PI / 5;
+                const scaleZ = Number.isFinite(projection.scaleZ) ? projection.scaleZ : 0.6;
+                const cosRot = Math.cos(rotation);
+                const sinRot = Math.sin(rotation);
+                const rotatedX = position.x * cosRot - position.y * sinRot;
+                const rotatedY = position.x * sinRot + position.y * cosRot;
+                const cosTilt = Math.cos(tilt);
+                const sinTilt = Math.sin(tilt);
+                const adjustedZ = (position.z || 0) * scaleZ;
+                const projX = rotatedX;
+                const projY = rotatedY * cosTilt - adjustedZ * sinTilt;
+                const depth = rotatedY * sinTilt + adjustedZ * cosTilt;
+                return { x: projX, y: projY, depth };
+            }
+            return { x: position.x, y: position.y, depth: position.z || 0 };
+        }
+
+        function getNodeRenderPosition(node, key) {
+            const position = getNodePosition(node, key);
+            return projectPosition(position);
+        }
+
+        function getAggregationCacheKey(bucketWorldSize) {
+            if (!Number.isFinite(bucketWorldSize) || bucketWorldSize <= 0) return 'default';
+            return bucketWorldSize.toFixed(3);
+        }
+
+        function ensureAggregationCacheEntry(cacheKey, bucketWorldSize) {
+            if (aggregationCache.has(cacheKey)) return aggregationCache.get(cacheKey);
+            const safeBucketSize = Number.isFinite(bucketWorldSize) && bucketWorldSize > 0 ? bucketWorldSize : 1;
+            const buckets = new Map();
+            grid.forEach((node, key) => {
+                const { x, y } = getNodeRenderPosition(node, key);
+                const bucketX = Math.round(x / safeBucketSize);
+                const bucketY = Math.round(y / safeBucketSize);
+                const bucketKey = `${bucketX},${bucketY}`;
+                let bucket = buckets.get(bucketKey);
+                if (!bucket) {
+                    bucket = {
+                        key: bucketKey,
+                        xSum: 0,
+                        ySum: 0,
+                        valueSum: 0,
+                        count: 0,
+                        maxValue: -Infinity,
+                        minValue: Infinity,
+                        minX: Infinity,
+                        maxX: -Infinity,
+                        minY: Infinity,
+                        maxY: -Infinity,
+                    };
+                    buckets.set(bucketKey, bucket);
+                }
+                bucket.xSum += x;
+                bucket.ySum += y;
+                bucket.valueSum += Number.isFinite(node.value) ? node.value : 0;
+                bucket.count += 1;
+                bucket.maxValue = Math.max(bucket.maxValue, node.value);
+                bucket.minValue = Math.min(bucket.minValue, node.value);
+                bucket.minX = Math.min(bucket.minX, x);
+                bucket.maxX = Math.max(bucket.maxX, x);
+                bucket.minY = Math.min(bucket.minY, y);
+                bucket.maxY = Math.max(bucket.maxY, y);
+            });
+            const entry = { bucketWorldSize: safeBucketSize, buckets };
+            aggregationCache.set(cacheKey, entry);
+            if (aggregationCache.size > 24) {
+                const oldestKey = aggregationCache.keys().next().value;
+                if (oldestKey !== undefined && oldestKey !== cacheKey) {
+                    aggregationCache.delete(oldestKey);
+                }
+            }
+            return entry;
         }
 
         function drawGrid() {
@@ -2136,38 +2536,34 @@ class GridSimulatorApp {
             const shouldAggregate = view.scale < AGGREGATION_SCALE_THRESHOLD;
             const renderEdges = !shouldAggregate && view.scale >= EDGE_RENDER_SCALE_THRESHOLD;
             const visibleNodes = new Map();
-            const aggregatedBuckets = new Map();
-
             const valueStatsTracker = createStatsTracker();
             const renderStatsTracker = createStatsTracker();
+            let visibleBuckets = null;
+            let bucketWorldSize = 0;
 
-            const bucketWorldSize = shouldAggregate
-                ? Math.max(AGGREGATION_BUCKET_PIXELS / safeScale, nodeRadius * 2)
-                : 0;
-
-            for (const [key, node] of grid.entries()) {
-                const [x, y] = key.split(',').map(Number);
-                if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
-
-                trackStatsValue(valueStatsTracker, node.value);
-
-                if (shouldAggregate) {
-                    const bucketX = Math.round(x / bucketWorldSize);
-                    const bucketY = Math.round(y / bucketWorldSize);
-                    const bucketKey = `${bucketX},${bucketY}`;
-                    let bucket = aggregatedBuckets.get(bucketKey);
-                    if (!bucket) {
-                        bucket = { xSum: 0, ySum: 0, valueSum: 0, count: 0, maxValue: -Infinity, minValue: Infinity };
-                        aggregatedBuckets.set(bucketKey, bucket);
+            if (shouldAggregate) {
+                bucketWorldSize = Math.max(AGGREGATION_BUCKET_PIXELS / safeScale, nodeRadius * 2);
+                const cacheKey = getAggregationCacheKey(bucketWorldSize);
+                const cacheEntry = ensureAggregationCacheEntry(cacheKey, bucketWorldSize);
+                const buckets = cacheEntry?.buckets || new Map();
+                visibleBuckets = [];
+                buckets.forEach((bucket) => {
+                    if (!bucket || !bucket.count) return;
+                    if (bucket.maxX < viewport.minX || bucket.minX > viewport.maxX || bucket.maxY < viewport.minY || bucket.minY > viewport.maxY) {
+                        return;
                     }
-                    bucket.xSum += x;
-                    bucket.ySum += y;
-                    bucket.valueSum += node.value;
-                    bucket.count += 1;
-                    bucket.maxValue = Math.max(bucket.maxValue, node.value);
-                    bucket.minValue = Math.min(bucket.minValue, node.value);
-                } else {
-                    visibleNodes.set(key, { node, x, y });
+                    visibleBuckets.push(bucket);
+                    trackStatsValue(valueStatsTracker, bucket.maxValue);
+                    trackStatsValue(valueStatsTracker, bucket.minValue);
+                });
+            } else {
+                for (const [key, node] of grid.entries()) {
+                    const projected = getNodeRenderPosition(node, key);
+                    const { x, y, depth } = projected;
+                    if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
+
+                    visibleNodes.set(key, { node, x, y, depth });
+                    trackStatsValue(valueStatsTracker, node.value);
                     trackStatsValue(renderStatsTracker, node.value);
                 }
             }
@@ -2195,38 +2591,42 @@ class GridSimulatorApp {
 
             if (shouldAggregate) {
                 resetStatsTracker(renderStatsTracker);
-                for (const bucket of aggregatedBuckets.values()) {
-                    if (!bucket.count) continue;
-                    const averageValue = bucket.valueSum / bucket.count;
-                    const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
-                    const blend = Math.min(0.7, bucket.count / 12);
-                    const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
-                    bucket.displayValue = displayValue;
-                    trackStatsValue(renderStatsTracker, displayValue);
+                if (Array.isArray(visibleBuckets)) {
+                    visibleBuckets.forEach((bucket) => {
+                        if (!bucket.count) return;
+                        const averageValue = bucket.valueSum / bucket.count;
+                        const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
+                        const blend = Math.min(0.7, bucket.count / 12);
+                        const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
+                        bucket.displayValue = displayValue;
+                        trackStatsValue(renderStatsTracker, displayValue);
+                    });
                 }
                 visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
                 gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
                 colorContext.visibleStats = visibleStatsForRange;
                 colorContext.gradientRange = gradientRange;
 
-                for (const bucket of aggregatedBuckets.values()) {
-                    if (!bucket.count) continue;
-                    const avgX = bucket.xSum / bucket.count;
-                    const avgY = bucket.ySum / bucket.count;
-                    const sizeBoost = Math.min(3, Math.sqrt(bucket.count));
-                    const adjustedRadius = Math.max(nodeRadius, nodeRadius * sizeBoost);
-                    colorContext.clusterSize = bucket.count;
-                    const displayValue = bucket.displayValue ?? (bucket.valueSum / bucket.count);
-                    ctx.fillStyle = getNodeColor(displayValue, stats, gradientRange, colorContext);
-                    ctx.beginPath();
-                    ctx.arc(avgX, avgY, adjustedRadius, 0, 2 * Math.PI);
-                    ctx.fill();
+                if (Array.isArray(visibleBuckets)) {
+                    visibleBuckets.forEach((bucket) => {
+                        if (!bucket.count) return;
+                        const avgX = bucket.xSum / bucket.count;
+                        const avgY = bucket.ySum / bucket.count;
+                        const sizeBoost = Math.min(3, Math.sqrt(bucket.count));
+                        const adjustedRadius = Math.max(nodeRadius, nodeRadius * sizeBoost);
+                        colorContext.clusterSize = bucket.count;
+                        const displayValue = bucket.displayValue ?? (bucket.valueSum / bucket.count);
+                        ctx.fillStyle = getNodeColor(displayValue, stats, gradientRange, colorContext);
+                        ctx.beginPath();
+                        ctx.arc(avgX, avgY, adjustedRadius, 0, 2 * Math.PI);
+                        ctx.fill();
+                    });
                 }
 
                 if (selectedNodeKey && grid.has(selectedNodeKey)) {
-                    const [sx, sy] = selectedNodeKey.split(',').map(Number);
+                    const node = grid.get(selectedNodeKey);
+                    const { x: sx, y: sy } = getNodeRenderPosition(node, selectedNodeKey);
                     if (sx >= viewport.minX && sx <= viewport.maxX && sy >= viewport.minY && sy <= viewport.maxY) {
-                        const node = grid.get(selectedNodeKey);
                         colorContext.clusterSize = 1;
                         ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
                         ctx.beginPath();
@@ -2239,7 +2639,14 @@ class GridSimulatorApp {
                 }
             } else {
                 colorContext.clusterSize = 1;
-                for (const [key, entry] of visibleNodes.entries()) {
+                const iterable = projection.mode === 'isometric'
+                    ? Array.from(visibleNodes.entries()).sort((a, b) => {
+                        const depthA = Number.isFinite(a[1].depth) ? a[1].depth : 0;
+                        const depthB = Number.isFinite(b[1].depth) ? b[1].depth : 0;
+                        return depthA - depthB;
+                    })
+                    : visibleNodes.entries();
+                for (const [key, entry] of iterable) {
                     const { node, x, y } = entry;
                     ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
                     ctx.beginPath();
@@ -2253,9 +2660,24 @@ class GridSimulatorApp {
                 }
             }
             ctx.restore();
+
+            if (app.isComputing) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(26, 26, 29, 0.55)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#f0f0f0';
+                ctx.font = '16px "Segoe UI", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Computing grid...', canvas.width / 2, canvas.height / 2);
+                ctx.restore();
+            }
         }
 
-        function computeGridStats() {
+        function computeGridStats(forceRecompute = false) {
+            if (!forceRecompute && app.cachedStats && Number.isFinite(app.cachedStats.min) && Number.isFinite(app.cachedStats.max)) {
+                return app.cachedStats;
+            }
             let min = Infinity;
             let max = -Infinity;
             for (const node of grid.values()) {
@@ -2266,7 +2688,9 @@ class GridSimulatorApp {
                 min = 0;
                 max = 0;
             }
-            return { min, max };
+            const stats = { min, max };
+            app.cachedStats = stats;
+            return stats;
         }
 
         function resolveGradientRange(globalStats, viewStats, viewState) {
@@ -2515,6 +2939,9 @@ class GridSimulatorApp {
             binaryEnumerationSupported = Array.isArray(moves) && moves.length === 2;
             app.binaryEnumerationSupported = binaryEnumerationSupported;
 
+            const positionSource = typeof config.positionSource === 'string' ? config.positionSource : '';
+            const positionFn = typeof config.positionFn === 'function' ? config.positionFn : null;
+
             const nextConfig = {
                 generations,
                 reunification: controls.reunification.value,
@@ -2536,6 +2963,28 @@ class GridSimulatorApp {
                 backpropSource,
                 backpropSteps,
                 binaryEnumerationSupported,
+                positionSource,
+                positionFn,
+            };
+            nextConfig.workerPayload = {
+                generations,
+                moves,
+                propagation: propagationDimensions.map(dimension => ({
+                    key: dimension.key,
+                    source: dimension.source,
+                    defaultValue: dimension.defaultValue,
+                    defaultActive: dimension.defaultActive,
+                })),
+                reunification: {
+                    mode: reunificationMode,
+                    source: reunificationMode === 'personalized' ? reunificationSource : '',
+                },
+                effectiveValueSource,
+                backpropSource,
+                backpropSteps,
+                binaryEnumerationSupported,
+                dimensionDefaults,
+                positionSource,
             };
             config = nextConfig;
             app.config = config;
@@ -2562,20 +3011,56 @@ class GridSimulatorApp {
             setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
             toggleCustomGradientInputs();
             toggleReunificationEditor();
-        binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
-        app.binaryEnumerationSupported = binaryEnumerationSupported;
-        config.binaryEnumerationSupported = binaryEnumerationSupported;
+            binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
+            app.binaryEnumerationSupported = binaryEnumerationSupported;
+            config.binaryEnumerationSupported = binaryEnumerationSupported;
         }
 
         function run() {
-            if (updateConfigFromUI()) {
-                generateGrid();
+            if (!updateConfigFromUI()) return;
+
+            const worker = app.workerBridge;
+            const payload = config.workerPayload || null;
+            if (worker && payload) {
+                app.isComputing = true;
+                app.pendingComputePayload = payload;
                 drawGrid();
-                inspectorPanel.style.display = 'none';
-                updateInspectorBinarySection(null);
-                if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
-                notifyBackpropApplied();
+                worker.compute(payload).then((result) => {
+                    if (app.pendingComputePayload !== payload) return;
+                    applyGridPayload(result);
+                    app.isComputing = false;
+                    app.pendingComputePayload = null;
+                    inspectorPanel.style.display = 'none';
+                    updateInspectorBinarySection(null);
+                    if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
+                    notifyBackpropApplied();
+                    drawGrid();
+                }).catch((error) => {
+                    console.warn('Worker computation failed, falling back to main thread', error);
+                    app.isComputing = false;
+                    app.pendingComputePayload = null;
+                    generateGridSync();
+                    resetViewCaches();
+                    const stats = computeGridStats(true);
+                    app.cachedStats = stats;
+                    inspectorPanel.style.display = 'none';
+                    updateInspectorBinarySection(null);
+                    if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
+                    notifyBackpropApplied();
+                    drawGrid();
+                });
+                return;
             }
+
+            generateGridSync();
+            resetViewCaches();
+            const stats = computeGridStats(true);
+            app.cachedStats = stats;
+            inspectorPanel.style.display = 'none';
+            updateInspectorBinarySection(null);
+            if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
+            notifyBackpropApplied();
+            drawGrid();
         }
 
         function findNodeAt(mouseX, mouseY) {
@@ -2587,7 +3072,7 @@ class GridSimulatorApp {
                 : 1;
             const hitRadius = Math.max(getNodeRadius() * aggregationMultiplier, 0.3);
             for (const [key, node] of grid.entries()) {
-                const [nodeX, nodeY] = key.split(',').map(Number);
+                const { x: nodeX, y: nodeY } = getNodeRenderPosition(node, key);
                 if (Math.hypot(gridX - nodeX, gridY - nodeY) < hitRadius) return key;
             }
             return null;
@@ -2915,8 +3400,12 @@ class GridSimulatorApp {
         app.scheduleRunImmediate = scheduleRunImmediate;
         app.scheduleRunDebounced = scheduleRunDebounced;
         app.updateConfigFromUI = updateConfigFromUI;
-        app.generateGrid = generateGrid;
+        app.generateGrid = generateGridSync;
         app.drawGrid = drawGrid;
+        app.applyGridPayload = applyGridPayload;
+        app.resetViewCaches = resetViewCaches;
+        app.setPositionLogic = setPositionLogic;
+        app.setProjectionMode = setProjectionMode;
         app.getCodeValue = getCodeValue;
         app.setCodeValue = setCodeValue;
         app.setEditorError = setEditorError;
