@@ -1,81 +1,127 @@
 # Advanced Grid Propagation Simulator
 
-This project explores how values propagate across branching lattices such as Pascal-like grids and divergent trees. It ships as a single-page simulator (`simulator.html`) tailored for experimenting with custom move sets, propagation rules, and visualization gradients.
+The Advanced Grid Propagation Simulator is a single-page exploration lab for lattices that branch, recombine, and optionally backpropagate corrections. Everything lives inside `simulator.html`, but the page now ships with a richer control surface, tabbed logic editors backed by CodeMirror, persistent layout settings, and upgraded analytics that make it easier to reason about Pascal-like systems and their more exotic cousins.
 
 ## Highlights
-- Fully interactive canvas that visualizes each generation of the propagation graph, with draggable pan and scroll-to-zoom navigation.
-- Multi-dimensional propagation editors that let you sculpt primary and secondary flows, blend them through an effective-value compositor, and optionally run n-step backpropagation loops.
-- Editable propagation, composition, color, HDR, and backprop logic using embedded CodeMirror editors for quick iteration and syntax-highlighted experimentation.
-- Gradient controls that let you normalize colors symmetrically, clamp to positive/negative ranges, or enforce explicit min/max spans.
-- Built-in presets that reproduce classic Pascal behaviour, divergent amplification, echo feedback loops, and decay scenarios.
-- Inspector panel with clickable lineage and local-storage projects so you can hop between parents/children, save studies, and reload configurations between sessions.
-- Binary path analytics that surface C(n, k) counts, 0/1 distributions, and representative enumerations for each node.
-- Companion research notes inside `studies/` describing theoretical backgrounds and worked examples that inspired the simulator.
+- Resizable control column with a collapsible editor stack; layout choices (width, editor height, collapsed state) persist via `localStorage`.
+- Tabbed CodeMirror editors for primary/secondary propagation, effective-value composition, backpropagation, custom reunification, color, and HDR logic—each wired to live re-evaluation with inline error surfacing.
+- Five curated presets (Pascal, Divergent, Backwards, Decay, Sierpinski) that illustrate different move sets, reunification strategies, and rendering palettes.
+- Backpropagation loop support that iterates user-defined heuristics over parent/child pairs after the forward sweep.
+- Inspector panel with lineage chips, value summaries, optional binary path enumeration popovers, and view-aware gradient statistics.
+- Canvas renderer that auto-aggregates distant nodes, blends global and viewport statistics, and drives an HDR-aware color grading pipeline.
 
 ## Getting Started
 1. Clone or download the repository.
-2. Open `simulator.html` in any modern desktop browser. No build step is required.
-3. Ensure the browser can reach the CodeMirror CDN (or host those assets locally if you need offline access).
+2. Open `simulator.html` in a modern desktop browser. No build step is required.
+3. Ensure the browser can reach the CodeMirror CDN (or host those assets locally for offline use).
 
-## Controls Overview
-- **Simulation Core**  
-  Configure the number of generations to propagate and choose how multiple contributions reunify (`sum`, `average`, `max`).  
-  Dial in optional *Backpropagation Steps* to iteratively let child corrections influence parents (and, if desired, cascade back to children).
+## Interface Overview
+- **Simulation Core** – Choose the number of generations, set the reunification strategy (`sum`, `average`, `max`, or user-defined `personalized` logic), and specify optional backpropagation steps that run after each generation.
+- **Propagation Rules** – Define the move vectors as raw JSON. Two moves enable Pascal-style branches; additional vectors unlock multi-parent rendezvous or backtracking paths.
+- **Logic Editors** – The tabbed editors accept JavaScript snippets that return functions. Toggling the personalized reunification strategy automatically reveals the matching editor. You can hide the entire editor stack for presentation mode; reopening restores the previous height.
+- **Presets** – Buttons seed the workspace with canned move sets and logic. The Sierpinski preset demonstrates parity-driven rendering, Backwards introduces a negative move to revisit ancestors, and Divergent/Decay highlight gain and attenuation flows.
+- **Projects** – Name the current configuration and save it to `localStorage`. Saved studies include logic snippets, gradient preferences, and layout mode. Load or delete entries directly from the sidebar.
+- **Inspector & Analytics** – Clicking a node reveals coordinates, generation, parent/child links, and aggregated dimension metadata. Binary path analytics compute $\binom{n}{k}$ counts, 0/1 histograms, and sample enumerations; set `ENABLE_HOVER_ENUMERATION_POPUP` to `true` in `simulator.html` to mirror these details in hover tooltips.
+- **Canvas Interaction** – Drag to pan, scroll to zoom. When you zoom out beyond an adaptive threshold the renderer clusters nearby nodes, tracking min/max values per bucket to keep the visualization legible.
 
-- **Propagation Rules**  
-  *Move Vectors* define how children spawn (`[dx, dy]`).  
-  *Propagation Dimensions* expose primary and secondary scripts that run per parent → child transfer with the signature `dimension(parentValue, parentDimensions, branchIndex, moveVector, context)`. Return either a number or an object such as `{ value, isActive, meta }`.  
-  *Effective Final Value* receives the aggregated dimension outputs (`effectiveValue(dimensions, context)`) and resolves the scalar that drives rendering/statistics.  
-  *Backpropagation Function* executes during optional rewind passes with the signature `backprop(childState, parentState, context)` and can nudge parents and descendants after the forward sweep.
+## Custom Logic APIs
+### Propagation Dimensions
+Each dimension executes as:
 
-- **Visualization**  
-  Select the gradient scale:
-  - `Symmetric ±max`: auto-normalizes around zero using the largest absolute value encountered.
-  - `0 → max`: maps from zero up to the peak positive value.
-  - `min → 0`: emphasizes negative basins.
-  - `Custom range`: specify precise min/max bounds to compare disparate runs.
-  
-  The **Color Logic Function** executes with `(value, stats, range)` and must return a CSS color string. `stats` exposes overall `{min, max}`, while `range` reflects the resolved gradient span. The provided default produces warm tones for positive values and cool tones for negative values; adapt it to highlight the metrics you care about.
+```js
+dimension(parentValue, parentDimensions, branchIndex, move, context)
+```
 
-- **Presets**  
-  Four preset buttons quickly load curated move/logic/gradient combinations for Pascal, Divergent, Echo, and Decay scenarios. Use them as launchpads for further study.
+Return either a number or `{ value, isActive, contributors, meta }`. Results are collected per child and reunified according to the selected strategy. The provided `context` exposes the parent key, generation index, move vector, and branch index so you can implement stateful or parity-based flows.
 
-- **Projects**  
-  Enter a project name to save the current configuration (including both logic scripts and gradient settings) into `localStorage`. Use the dropdown to reload or delete saved studies.
+### Effective Value Function
+Combine the dimension aggregates to determine the scalar rendered for the node:
 
-- **Canvas Interaction**  
-  Click nodes to inspect coordinates, generation, value, parents, and children. The Binary Paths panel in the inspector derives C(n, k) counts and sample enumerations; set `ENABLE_HOVER_ENUMERATION_POPUP` to `true` in `simulator.html` to mirror those metrics in a hover popup. Use the inspector’s lineage chips to jump directly to any parent or child. Drag to pan; scroll to zoom. The inspector can be dismissed via the close icon.
+```js
+effectiveValue(dimensions, context)
+```
 
-## Crafting Custom Logic
-- **Propagation Dimensions**  
-  Each dimension script runs as `dimension(parentValue, parentDimensions, branchIndex, moveVector, context)`. Return either a number or an object such as `{ value, isActive, meta }`. Entries inside `parentDimensions` expose `{ value, isActive, contributors, meta }`, letting secondary channels react to the current primary flow or prior corrections.
+`context.dimensionKeys` lists all registered dimensions. If your function throws or returns a non-finite number the simulator falls back to the primary dimension.
 
-- **Effective Value Function**  
-  Compose the per-dimension aggregates with `effectiveValue(dimensions, context)` and return the scalar that should drive rendering and statistics. The default simply sums an active secondary channel into the primary value.
+### Reunification Function
+Selecting `personalized` enables a custom reducer:
 
-- **Backpropagation Function**  
-  When backprop steps are enabled, `backprop(childState, parentState, context)` (with `context` exposing `generation`, `step`, `totalSteps`, and the relevant keys) can return `{ parent, child }` objects that supply `valueDelta`, `valueOverride`, and `dimensions` adjustments to gently steer parents (and optionally recondition children) after the forward sweep.
+```js
+reunify(values, stats)
+```
 
-- **Color Logic Function**  
-  Return any valid CSS color. You can build diverging palettes, threshold-based highlights, or range-dependent styling—ideal for comparing datasets or spotting anomalies.
+`stats` includes `{ count, sum, average, min, max }`. Return the scalar you want applied to the child node. Errors fall back to the raw sum to keep the simulation running.
 
-- **HDR Mapping Function**  
-  Shape luminance with `hdr(input, context)`; provide a value between 0 and 1 to blend subtle ranges without losing contrast.
+### Backpropagation Function
+When `Backpropagation Steps` is greater than zero, the simulator replays user logic:
 
-Runtime errors inside either editor are surfaced by a red outline, and the simulator falls back to the last valid configuration so you can quickly recover.
+```js
+backprop(childState, parentState, context)
+```
+
+Return `{ parent, child }` payloads that describe `valueDelta`, `valueOverride`, or per-dimension adjustments. Steps execute sequentially, and cumulative updates are applied after each iteration to keep the lattice stable.
+
+### Color and HDR Logic
+Customize visualization with:
+
+```js
+color(value, stats, range, context)
+hdr(input, context)
+```
+
+`context` exposes the current zoom `scale` so you can adjust palettes or intensify highlights when zoomed out. The default HDR function uses a logarithmic shoulder with gamma mixing to preserve contrast across large spans.
+
+## Rendering & Performance Notes
+- `GridSimulatorApp` persists layout preferences (`gridSimEditorHeight`, `gridSimSidebarWidth`, `gridSimEditorCollapsed`) and restores them on boot before the editors mount.
+- The renderer blends global min/max values with viewport samples to compute gradient spans, ensuring zoomed-in detail matches the overall grid context.
+- When `view.scale` drops below `AGGREGATION_SCALE_THRESHOLD`, nodes are bucketed into screen-space tiles and drawn as aggregated blobs, dramatically improving performance on large generation counts.
+- Default color ramps interpolate between curated warm/cool palettes, but you can rewrite them entirely from the color logic editor.
+
+## Simulation Lifecycle (Technical Overview)
+- `updateConfigFromUI` validates moves, compiles user snippets with `new Function`, and stores both source strings and executable callbacks in `app.config`. Propagation dimensions are keyed (primary/secondary by default) so downstream rendering can introspect them.
+- `generateGrid` performs the forward sweep: it clones parent dimensions, invokes each propagation function, accumulates child contributions, chooses a reunification result, and computes the effective value. Binary path metadata is tracked whenever only two moves are active, enabling $C(n, k)$ analytics without extra computation.
+- Optional backpropagation steps iterate through stored parent/child links, calling the user-supplied function and applying queued updates via `applyAccumulatedUpdates`.
+- `drawGrid` computes statistics, resolves gradient spans, evaluates the color/HDR functions per node (or per aggregate bucket), and renders the canvas layer. Selection outlines adjust to screen DPI so highlighted nodes remain visible.
+
+## Mathematical Background
+### Binomial Coincidence Counts
+For a binary lattice with $n$ steps and $k$ rightward moves, the number of unique paths that merge at $(n, k)$ equals:
+
+$$
+C(n, k) = \binom{n}{k} = \frac{n!}{k!(n-k)!}
+$$
+
+This count drives the Binary Paths panel and aligns with the analysis in `studies/grid-analysis-ITA.md`.
+
+### Enumerating Paths
+The simulator stores sample enumerations of the binary strings that reach a node. Conceptually we permute a base string with $k$ ones and $n-k$ zeros to enumerate all coincident histories—mirroring the permutations described in the “discourse” section of the research notes.
+
+### Trinomial and Higher-Order Lattices
+Extending to three branches per generation maps to the trinomial coefficient:
+
+$$
+T(n, k_1, k_2, k_3) = \frac{n!}{k_1!\,k_2!\,k_3!}, \quad k_1 + k_2 + k_3 = n
+$$
+
+The Backwards preset demonstrates how additional move vectors can revisit earlier coordinates, while custom logic can emulate the trinomial pyramids detailed in the companion paper.
+
+### Fractal Step Lattices
+The notes also investigate halving diagonal steps, yielding coordinates of the form
+
+$$
+X = \sum_{i=1}^{n} s_i \cdot 2^{-(i-1)}, \qquad s_i \in \{-1, +1\},
+$$
+
+which produce Cantor-like dust with no coincidences. Implementing those moves requires extending the simulator to four diagonal vectors with diminishing magnitudes; the existing framework already supports variable-length move sets and custom reunification to explore such systems.
 
 ## Reference Material
-- `studies/grid-analysis-ITA.md` documents the combinatorial theory, including binomial coefficients and path enumeration.
-- `studies/propagate-parentValue.md` dives deeper into how parent values influence downstream propagation in different scenarios.
-
-Review these notes alongside the simulator to bridge theoretical formulas with visual intuition.
+- `studies/grid-analysis-ITA.md` – combinatorial theory, trinomial expansions, and fractal lattice discourse.
+- `studies/propagate-parentValue.md` – explains the separation between forward propagation and reunification.
 
 ## Configuration Flags
-- `ENABLE_HOVER_ENUMERATION_POPUP`: when toggled to `true` in `simulator.html`, hovering a node (or its related chips in the inspector) shows a floating panel with the same binary enumeration breakdown rendered in the inspector.
+- `ENABLE_HOVER_ENUMERATION_POPUP`: toggled in `simulator.html` to mirror inspector enumerations as hover tooltips on the canvas and lineage chips.
 
 ## Extending the Project
-- Mirror the existing presets to distribute new case studies or to embed course material.
-- Host the CodeMirror assets locally if you need an offline classroom setup.
-- Because everything lives in `simulator.html`, you can integrate additional analytics panels or export features without a build toolchain.
-
-Whether you are modelling Pascal’s Triangle, divergent energy flows, or custom lattices, the Advanced Grid Propagation Simulator accelerates experimentation by keeping the logic, visualization, and documentation in one place.
+- Mirror or tweak existing presets to package new lesson plans or research scenarios.
+- Host the CodeMirror assets locally for offline workshops.
+- Because everything is in `simulator.html`, it is straightforward to bolt on export routines, additional analytics panels, or automated sweeps that iterate over logic presets.
