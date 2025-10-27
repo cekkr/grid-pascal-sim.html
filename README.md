@@ -7,7 +7,7 @@ This project explores how values propagate across branching lattices such as Pas
 - Editable propagation logic and color logic using embedded CodeMirror editors for quick iteration and syntax-highlighted experimentation.
 - Gradient controls that let you normalize colors symmetrically, clamp to positive/negative ranges, or enforce explicit min/max spans.
 - Built-in presets that reproduce classic Pascal behaviour, divergent amplification, echo feedback loops, and decay scenarios.
-- Inspector panel and local-storage projects so you can track node lineage, save studies, and reload configurations between sessions.
+- Inspector panel with clickable lineage and local-storage projects so you can hop between parents/children, save studies, and reload configurations between sessions.
 - Companion research notes inside `studies/` describing theoretical backgrounds and worked examples that inspired the simulator.
 
 ## Getting Started
@@ -39,7 +39,7 @@ This project explores how values propagate across branching lattices such as Pas
   Enter a project name to save the current configuration (including both logic scripts and gradient settings) into `localStorage`. Use the dropdown to reload or delete saved studies.
 
 - **Canvas Interaction**  
-  Click nodes to inspect coordinates, generation, value, and parents. Drag to pan; scroll to zoom. The inspector can be dismissed via the close icon.
+  Click nodes to inspect coordinates, generation, value, parents, and children. Use the inspector’s lineage chips to jump directly to any parent or child. Drag to pan; scroll to zoom. The inspector can be dismissed via the close icon.
 
 ## Crafting Custom Logic
 - **Propagation Function**  

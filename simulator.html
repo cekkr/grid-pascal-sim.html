@@ -244,13 +244,40 @@
             font-size: 0.9em;
             display: none; /* Hidden by default */
             width: 250px;
-            pointer-events: none; /* So it doesn't block clicks */
+            pointer-events: auto;
         }
         #inspector-panel .close-btn {
             position: absolute;
             top: 5px; right: 8px;
             cursor: pointer; font-weight: bold;
             pointer-events: auto;
+        }
+        .inspector-node-links {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-left: 4px;
+            min-width: 0;
+        }
+        .inspector-node-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background-color: rgba(255, 255, 255, 0.08);
+            cursor: pointer;
+            color: inherit;
+            font-size: 0.85em;
+            pointer-events: auto;
+            user-select: none;
+        }
+        .inspector-node-link:hover,
+        .inspector-node-link:focus {
+            background-color: rgba(76, 130, 247, 0.2);
+            border-color: var(--primary-color);
+            outline: none;
         }
 
         #customGradientInputs {
@@ -422,7 +449,8 @@ return clamp01(result);</textarea>
                 <p><strong>Coords:</strong> <span id="inspector-coords"></span></p>
                 <p><strong>Value:</strong> <span id="inspector-value"></span></p>
                 <p><strong>Generation:</strong> <span id="inspector-gen"></span></p>
-                <p><strong>Parents:</strong> <span id="inspector-parents"></span></p>
+                <p><strong>Parents:</strong> <span id="inspector-parents" class="inspector-node-links"></span></p>
+                <p><strong>Children:</strong> <span id="inspector-children" class="inspector-node-links"></span></p>
             </div>
         </div>
     </div>
@@ -436,6 +464,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('gridCanvas');
     const ctx = canvas.getContext('2d');
     const inspectorPanel = document.getElementById('inspector-panel');
+    const inspectorFields = {
+        coords: document.getElementById('inspector-coords'),
+        value: document.getElementById('inspector-value'),
+        gen: document.getElementById('inspector-gen'),
+        parents: document.getElementById('inspector-parents'),
+        children: document.getElementById('inspector-children'),
+    };
     const controls = {
         generations: document.getElementById('generations'),
         reunification: document.getElementById('reunification'),
@@ -857,7 +892,7 @@ document.addEventListener('DOMContentLoaded', () => {
         grid.clear();
         selectedNodeKey = null;
         const startNodeKey = "0,0";
-        grid.set(startNodeKey, { value: 1.0, gen: 0, parents: [] });
+        grid.set(startNodeKey, { value: 1.0, gen: 0, parents: [], children: [] });
         let frontier = new Set([startNodeKey]);
 
         for (let i = 0; i < config.generations; i++) {
@@ -873,12 +908,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     const childX = x + move[0];
                     const childY = y + move[1];
                     const childKey = `${childX},${childY}`;
+                    if (!Array.isArray(node.children)) node.children = [];
+                    if (!node.children.includes(childKey)) node.children.push(childKey);
                     if (!contributions.has(childKey)) contributions.set(childKey, []);
                     contributions.get(childKey).push({value: valueToPass, parentKey: nodeKey});
                 });
             }
             for (const [childKey, incoming] of contributions.entries()) {
                 const incomingValues = incoming.map(c => c.value);
+                const parentKeys = Array.from(new Set(incoming.map(c => c.parentKey)));
                 let finalValue = 0;
                 switch (config.reunification) {
                     case 'sum': finalValue = incomingValues.reduce((a, b) => a + b, 0); break;
@@ -886,9 +924,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'max': finalValue = Math.max(...incomingValues); break;
                 }
                 if (grid.has(childKey)) {
-                    grid.get(childKey).value += finalValue;
+                    const childNode = grid.get(childKey);
+                    childNode.value += finalValue;
+                    if (!Array.isArray(childNode.parents)) childNode.parents = [];
+                    parentKeys.forEach(parentKey => {
+                        if (!childNode.parents.includes(parentKey)) childNode.parents.push(parentKey);
+                    });
                 } else {
-                    grid.set(childKey, { value: finalValue, gen: i + 1, parents: incoming.map(c => c.parentKey) });
+                    grid.set(childKey, { value: finalValue, gen: i + 1, parents: parentKeys, children: [] });
                 }
                 nextFrontier.add(childKey);
             }
@@ -1274,11 +1317,31 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const node = grid.get(nodeKey);
-        document.getElementById('inspector-coords').textContent = `(${nodeKey})`;
-        document.getElementById('inspector-value').textContent = node.value.toFixed(4);
-        document.getElementById('inspector-gen').textContent = node.gen;
-        document.getElementById('inspector-parents').textContent = node.parents.join(' | ') || 'None';
+        if (inspectorFields.coords) inspectorFields.coords.textContent = `(${nodeKey})`;
+        if (inspectorFields.value) inspectorFields.value.textContent = node.value.toFixed(4);
+        if (inspectorFields.gen) inspectorFields.gen.textContent = node.gen;
+        renderInspectorNodeLinks(inspectorFields.parents, Array.isArray(node.parents) ? node.parents : []);
+        renderInspectorNodeLinks(inspectorFields.children, Array.isArray(node.children) ? node.children : []);
         inspectorPanel.style.display = 'block';
+    }
+
+    function renderInspectorNodeLinks(container, keys) {
+        if (!container) return;
+        container.innerHTML = '';
+        const uniqueKeys = Array.from(new Set((keys || []).filter(Boolean)));
+        if (!uniqueKeys.length) {
+            container.textContent = 'None';
+            return;
+        }
+        uniqueKeys.forEach(key => {
+            const link = document.createElement('span');
+            link.className = 'inspector-node-link';
+            link.dataset.nodeKey = key;
+            link.setAttribute('role', 'button');
+            link.setAttribute('tabindex', '0');
+            link.textContent = key;
+            container.appendChild(link);
+        });
     }
 
     function saveProject() {
@@ -1427,6 +1490,27 @@ document.addEventListener('DOMContentLoaded', () => {
     controls.presetDecay.onclick = () => loadPreset(presets.decay);
     controls.presetSierpinski.onclick = () => loadPreset(presets.sierpinski);
     controls.inspectorCloseBtn.onclick = () => { inspectorPanel.style.display = 'none'; selectedNodeKey = null; drawGrid(); };
+    inspectorPanel.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
+        if (!target) return;
+        const nodeKey = target.dataset.nodeKey;
+        if (!nodeKey || !grid.has(nodeKey)) return;
+        selectedNodeKey = nodeKey;
+        updateInspectorPanel(nodeKey);
+        drawGrid();
+    });
+    inspectorPanel.addEventListener('keydown', (event) => {
+        if (event.defaultPrevented) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const target = event.target;
+        if (!target.classList || !target.classList.contains('inspector-node-link')) return;
+        event.preventDefault();
+        const nodeKey = target.dataset.nodeKey;
+        if (!nodeKey || !grid.has(nodeKey)) return;
+        selectedNodeKey = nodeKey;
+        updateInspectorPanel(nodeKey);
+        drawGrid();
+    });
     
     canvas.addEventListener('mousedown', e => { view.isDragging = true; view.lastX = e.clientX; view.lastY = e.clientY; });
     canvas.addEventListener('mouseup', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
