@@ -4,7 +4,8 @@ This project explores how values propagate across branching lattices such as Pas
 
 ## Highlights
 - Fully interactive canvas that visualizes each generation of the propagation graph, with draggable pan and scroll-to-zoom navigation.
-- Editable propagation logic and color logic using embedded CodeMirror editors for quick iteration and syntax-highlighted experimentation.
+- Multi-dimensional propagation editors that let you sculpt primary and secondary flows, blend them through an effective-value compositor, and optionally run n-step backpropagation loops.
+- Editable propagation, composition, color, HDR, and backprop logic using embedded CodeMirror editors for quick iteration and syntax-highlighted experimentation.
 - Gradient controls that let you normalize colors symmetrically, clamp to positive/negative ranges, or enforce explicit min/max spans.
 - Built-in presets that reproduce classic Pascal behaviour, divergent amplification, echo feedback loops, and decay scenarios.
 - Inspector panel with clickable lineage and local-storage projects so you can hop between parents/children, save studies, and reload configurations between sessions.
@@ -18,11 +19,14 @@ This project explores how values propagate across branching lattices such as Pas
 
 ## Controls Overview
 - **Simulation Core**  
-  Configure the number of generations to propagate and choose how multiple contributions reunify (`sum`, `average`, `max`).
+  Configure the number of generations to propagate and choose how multiple contributions reunify (`sum`, `average`, `max`).  
+  Dial in optional *Backpropagation Steps* to iteratively let child corrections influence parents (and, if desired, cascade back to children).
 
 - **Propagation Rules**  
   *Move Vectors* define how children spawn (`[dx, dy]`).  
-  *Propagation Function* runs for each parent → child transfer with the signature `propagate(parentValue, branchIndex, moveVector)`. The default script grows the left branch and damps the right.
+  *Propagation Dimensions* expose primary and secondary scripts that run per parent → child transfer with the signature `dimension(parentValue, parentDimensions, branchIndex, moveVector, context)`. Return either a number or an object such as `{ value, isActive, meta }`.  
+  *Effective Final Value* receives the aggregated dimension outputs (`effectiveValue(dimensions, context)`) and resolves the scalar that drives rendering/statistics.  
+  *Backpropagation Function* executes during optional rewind passes with the signature `backprop(childState, parentState, context)` and can nudge parents and descendants after the forward sweep.
 
 - **Visualization**  
   Select the gradient scale:
@@ -43,11 +47,20 @@ This project explores how values propagate across branching lattices such as Pas
   Click nodes to inspect coordinates, generation, value, parents, and children. The Binary Paths panel in the inspector derives C(n, k) counts and sample enumerations; set `ENABLE_HOVER_ENUMERATION_POPUP` to `true` in `simulator.html` to mirror those metrics in a hover popup. Use the inspector’s lineage chips to jump directly to any parent or child. Drag to pan; scroll to zoom. The inspector can be dismissed via the close icon.
 
 ## Crafting Custom Logic
-- **Propagation Function**  
-  Return the value that should reach the child node. Consider multiplying, translating, or conditioning on `index` to encode branch-specific behaviour.
+- **Propagation Dimensions**  
+  Each dimension script runs as `dimension(parentValue, parentDimensions, branchIndex, moveVector, context)`. Return either a number or an object such as `{ value, isActive, meta }`. Entries inside `parentDimensions` expose `{ value, isActive, contributors, meta }`, letting secondary channels react to the current primary flow or prior corrections.
+
+- **Effective Value Function**  
+  Compose the per-dimension aggregates with `effectiveValue(dimensions, context)` and return the scalar that should drive rendering and statistics. The default simply sums an active secondary channel into the primary value.
+
+- **Backpropagation Function**  
+  When backprop steps are enabled, `backprop(childState, parentState, context)` (with `context` exposing `generation`, `step`, `totalSteps`, and the relevant keys) can return `{ parent, child }` objects that supply `valueDelta`, `valueOverride`, and `dimensions` adjustments to gently steer parents (and optionally recondition children) after the forward sweep.
 
 - **Color Logic Function**  
   Return any valid CSS color. You can build diverging palettes, threshold-based highlights, or range-dependent styling—ideal for comparing datasets or spotting anomalies.
+
+- **HDR Mapping Function**  
+  Shape luminance with `hdr(input, context)`; provide a value between 0 and 1 to blend subtle ranges without losing contrast.
 
 Runtime errors inside either editor are surfaced by a red outline, and the simulator falls back to the last valid configuration so you can quickly recover.
 

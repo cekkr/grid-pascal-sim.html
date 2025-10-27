@@ -168,6 +168,7 @@
         .editor-tabs {
             display: flex;
             gap: 6px;
+            flex-wrap: wrap;
         }
         .editor-tab {
             width: auto;
@@ -189,14 +190,41 @@
         }
         .editor-content {
             position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
             height: 240px;
             border: 1px solid var(--border-color);
             border-radius: 4px;
             background-color: var(--input-bg);
-            overflow: hidden;
+            padding: 10px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+        .editor-section {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .editor-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .editor-section-header h4 {
+            margin: 0;
+            font-size: 0.95em;
+            color: rgba(255, 255, 255, 0.85);
+            font-weight: 600;
+        }
+        .editor-panes {
+            position: relative;
+            min-height: 150px;
         }
         #codeEditorPanel.collapsed .editor-tabs,
         #codeEditorPanel.collapsed .editor-content,
+        #codeEditorPanel.collapsed .editor-section,
         #codeEditorPanel.collapsed .editor-resizer {
             display: none;
         }
@@ -208,6 +236,9 @@
             box-sizing: border-box;
             flex-direction: column;
             gap: 6px;
+            background-color: rgba(0, 0, 0, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
         }
         .editor-pane.active {
             display: flex;
@@ -363,6 +394,8 @@
                     <option value="average">Average</option>
                     <option value="max">Maximum</option>
                 </select>
+                <label for="backpropSteps">Backpropagation Steps (optional)</label>
+                <input type="number" id="backpropSteps" value="0" min="0" max="50" step="1">
             </div>
 
             <div class="control-group">
@@ -376,24 +409,76 @@
                     <h3>Logic Editors</h3>
                     <button type="button" class="editor-toggle" id="editorToggleBtn" aria-expanded="true">Hide Editors</button>
                 </div>
-                <div class="editor-tabs" id="codeEditorTabs">
-                    <button type="button" class="editor-tab active" data-target-editor="propagationLogic">Propagation</button>
-                    <button type="button" class="editor-tab" data-target-editor="colorLogic">Color</button>
-                    <button type="button" class="editor-tab" data-target-editor="hdrLogic">HDR</button>
-                </div>
                 <div class="editor-content" id="codeEditorContent">
-                    <div class="editor-pane active" data-editor-pane="propagationLogic">
-                        <label for="propagationLogic">Propagation Function(parentValue, index, move)</label>
-                        <textarea id="propagationLogic">// 'Left' branch (index 0) gains value, 'right' loses.
-if (index === 0) {
-    return parentValue + 0.2;
-} else {
-    return parentValue - 0.3;
-}</textarea>
-                    </div>
-                    <div class="editor-pane" data-editor-pane="colorLogic">
-                        <label for="colorLogic">Color Logic Function(value, stats, range, context)</label>
-                        <textarea id="colorLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
+                    <section class="editor-section" data-editor-group="propagation">
+                        <div class="editor-section-header">
+                            <h4>Propagation Dimensions</h4>
+                            <div class="editor-tabs">
+                                <button type="button" class="editor-tab active" data-target-editor="propagationPrimaryLogic">Primary</button>
+                                <button type="button" class="editor-tab" data-target-editor="propagationSecondaryLogic">Secondary</button>
+                            </div>
+                        </div>
+                        <div class="editor-panes">
+                            <div class="editor-pane active" data-editor-pane="propagationPrimaryLogic">
+                                <label for="propagationPrimaryLogic">Primary Dimension(parentValue, parentDimensions, index, move, context)</label>
+                                <textarea id="propagationPrimaryLogic">// 'Left' branch (index 0) gains value, 'right' loses.
+const base = parentValue;
+const delta = index === 0 ? 0.2 : -0.3;
+return { value: base + delta, isActive: true };</textarea>
+                            </div>
+                            <div class="editor-pane" data-editor-pane="propagationSecondaryLogic">
+                                <label for="propagationSecondaryLogic">Secondary Dimension(parentValue, parentDimensions, index, move, context)</label>
+                                <textarea id="propagationSecondaryLogic">const primary = parentDimensions.primary?.value ?? parentValue;
+const magnitude = Math.abs(primary);
+if (magnitude > 1.5) {
+    const bias = index === 0 ? 0.12 : -0.08;
+    return {
+        value: primary * 0.3 + bias,
+        isActive: true,
+        meta: { reason: 'high-magnitude' },
+    };
+}
+return null;</textarea>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="editor-section" data-editor-group="composition">
+                        <div class="editor-section-header">
+                            <h4>Propagation Composition</h4>
+                            <div class="editor-tabs">
+                                <button type="button" class="editor-tab active" data-target-editor="effectiveValueLogic">Effective Value</button>
+                                <button type="button" class="editor-tab" data-target-editor="backpropLogic">Backpropagation</button>
+                            </div>
+                        </div>
+                        <div class="editor-panes">
+                            <div class="editor-pane active" data-editor-pane="effectiveValueLogic">
+                                <label for="effectiveValueLogic">Effective Final Value Function(dimensions, context)</label>
+                                <textarea id="effectiveValueLogic">const primary = dimensions.primary?.value ?? 0;
+const secondary = (dimensions.secondary?.isActive ? dimensions.secondary.value : 0);
+return primary + secondary;</textarea>
+                            </div>
+                            <div class="editor-pane" data-editor-pane="backpropLogic">
+                                <label for="backpropLogic">Backpropagation Function(childState, parentState, context)</label>
+                                <textarea id="backpropLogic">const delta = (childState.value - parentState.value) * 0.25;
+return {
+    parent: { valueDelta: delta },
+    child: { valueDelta: -delta * 0.25 },
+};</textarea>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="editor-section" data-editor-group="visualization">
+                        <div class="editor-section-header">
+                            <h4>Visualization Logic</h4>
+                            <div class="editor-tabs">
+                                <button type="button" class="editor-tab active" data-target-editor="colorLogic">Color</button>
+                                <button type="button" class="editor-tab" data-target-editor="hdrLogic">HDR</button>
+                            </div>
+                        </div>
+                        <div class="editor-panes">
+                            <div class="editor-pane active" data-editor-pane="colorLogic">
+                                <label for="colorLogic">Color Logic Function(value, stats, range, context)</label>
+                                <textarea id="colorLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
 const safeMax = range.max > 0 ? range.max : 1;
 const safeMin = range.min < 0 ? range.min : -1;
 const viewScale = (context && typeof context.scale === 'number') ? context.scale : 1;
@@ -443,10 +528,10 @@ if (value >= 0) {
 const hdrRatio = applyHDR({ ratio: Math.abs(value / safeMin), value, stats, range, polarity: 'negative', scale: viewScale });
 const ratio = enhanceRatio(hdrRatio);
 return toCss(sampleStops(negativeStops, ratio));</textarea>
-                    </div>
-                    <div class="editor-pane" data-editor-pane="hdrLogic">
-                        <label for="hdrLogic">HDR Mapping Function(input, context)</label>
-                        <textarea id="hdrLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
+                            </div>
+                            <div class="editor-pane" data-editor-pane="hdrLogic">
+                                <label for="hdrLogic">HDR Mapping Function(input, context)</label>
+                                <textarea id="hdrLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
 const { ratio, scale } = input;
 const base = clamp01(ratio);
 const shoulder = Math.log1p(base * 8) / Math.log1p(8);
@@ -457,7 +542,9 @@ if (scale && scale < 1) {
     result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
 }
 return clamp01(result);</textarea>
-                    </div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
                 <div class="editor-resizer" id="editorResizer" title="Drag to resize editors"></div>
             </div>
@@ -541,8 +628,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const controls = {
         generations: document.getElementById('generations'),
         reunification: document.getElementById('reunification'),
+        backpropSteps: document.getElementById('backpropSteps'),
         moves: document.getElementById('moves'),
-        propagationLogic: document.getElementById('propagationLogic'),
+        propagationPrimary: document.getElementById('propagationPrimaryLogic'),
+        propagationSecondary: document.getElementById('propagationSecondaryLogic'),
+        effectiveValueLogic: document.getElementById('effectiveValueLogic'),
+        backpropLogic: document.getElementById('backpropLogic'),
         projectName: document.getElementById('projectName'),
         saveProjectBtn: document.getElementById('saveProjectBtn'),
         deleteProjectBtn: document.getElementById('deleteProjectBtn'),
@@ -561,12 +652,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     const controlsPanel = document.getElementById('controls');
     const editorPanel = document.getElementById('codeEditorPanel');
-    const editorTabs = Array.from(document.querySelectorAll('.editor-tab'));
-    const editorPanes = Array.from(document.querySelectorAll('.editor-pane'));
     const editorContent = document.getElementById('codeEditorContent');
     const editorToggleBtn = document.getElementById('editorToggleBtn');
     const editorResizer = document.getElementById('editorResizer');
     const sidebarResizer = document.getElementById('sidebarResizer');
+    const editorSections = Array.from(document.querySelectorAll('.editor-section[data-editor-group]'));
 
     const STORAGE_KEYS = {
         editorHeight: 'gridSimEditorHeight',
@@ -580,12 +670,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max);
 
-    let activeEditorId = 'propagationLogic';
     let editorHeight = 240;
     let isEditorCollapsed = false;
     let binaryEnumerationSupported = false;
     let binaryHoverPopup = null;
     let currentHoverNodeKey = null;
+
+    const editorGroups = new Map();
 
     if (editorContent) {
         const storedHeight = parseInt(localStorage.getItem(STORAGE_KEYS.editorHeight), 10);
@@ -620,13 +711,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const customGradientInputs = document.getElementById('customGradientInputs');
     const codeEditors = {};
     const defaultColorLogicSource = controls.colorLogic.value;
-    const defaultPropagationSource = controls.propagationLogic.value;
     const defaultHdrLogicSource = controls.hdrLogic.value;
+    const defaultPropagationSources = {
+        primary: controls.propagationPrimary ? controls.propagationPrimary.value : '',
+        secondary: controls.propagationSecondary ? controls.propagationSecondary.value : '',
+    };
+    const defaultEffectiveValueSource = controls.effectiveValueLogic ? controls.effectiveValueLogic.value : '';
+    const defaultBackpropLogicSource = controls.backpropLogic ? controls.backpropLogic.value : '';
 
     function refreshEditorAfterLayout(editorId) {
         const instance = codeEditors[editorId];
         if (!instance) return;
         requestAnimationFrame(() => instance.refresh());
+    }
+
+    function refreshActiveEditors() {
+        if (isEditorCollapsed) return;
+        editorGroups.forEach(group => {
+            if (group.activeId) refreshEditorAfterLayout(group.activeId);
+        });
     }
 
     function ensureEditorExpanded() {
@@ -639,31 +742,48 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         localStorage.setItem(STORAGE_KEYS.editorCollapsed, 'false');
         if (editorContent) editorContent.style.height = `${editorHeight}px`;
-        refreshEditorAfterLayout(activeEditorId);
+        refreshActiveEditors();
     }
 
-    function setActiveEditor(editorId) {
-        if (!editorId) editorId = activeEditorId;
-        activeEditorId = editorId;
-        editorTabs.forEach(tab => {
-            const isActive = tab.dataset.targetEditor === activeEditorId;
+    function setActiveEditor(groupName, editorId, options = {}) {
+        const group = editorGroups.get(groupName);
+        if (!group) return;
+        if (!editorId) editorId = group.activeId;
+        group.activeId = editorId;
+        group.tabs.forEach(tab => {
+            const isActive = tab.dataset.targetEditor === editorId;
             tab.classList.toggle('active', isActive);
             tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
         });
-        editorPanes.forEach(pane => {
-            const isActive = pane.dataset.editorPane === activeEditorId;
+        group.panes.forEach(pane => {
+            const isActive = pane.dataset.editorPane === editorId;
             pane.classList.toggle('active', isActive);
         });
-        if (!isEditorCollapsed) refreshEditorAfterLayout(activeEditorId);
+        if (!options.skipRefresh) refreshActiveEditors();
     }
 
-    editorTabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            if (!tab.dataset.targetEditor) return;
-            ensureEditorExpanded();
-            setActiveEditor(tab.dataset.targetEditor);
+    function initializeEditorGroups() {
+        editorSections.forEach(section => {
+            const groupName = section.dataset.editorGroup;
+            if (!groupName) return;
+            const tabs = Array.from(section.querySelectorAll('.editor-tab'));
+            const panes = Array.from(section.querySelectorAll('.editor-pane'));
+            const defaultActiveId =
+                tabs.find(tab => tab.classList.contains('active'))?.dataset.targetEditor
+                || panes[0]?.dataset.editorPane;
+            const group = { section, tabs, panes, activeId: defaultActiveId };
+            editorGroups.set(groupName, group);
+            if (defaultActiveId) setActiveEditor(groupName, defaultActiveId, { skipRefresh: true });
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const targetId = tab.dataset.targetEditor;
+                    if (!targetId) return;
+                    ensureEditorExpanded();
+                    setActiveEditor(groupName, targetId);
+                });
+            });
         });
-    });
+    }
 
     if (editorToggleBtn && editorPanel) {
         editorToggleBtn.addEventListener('click', () => {
@@ -677,7 +797,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 editorToggleBtn.textContent = 'Hide Editors';
                 editorToggleBtn.setAttribute('aria-expanded', 'true');
                 if (editorContent) editorContent.style.height = `${editorHeight}px`;
-                refreshEditorAfterLayout(activeEditorId);
+                refreshActiveEditors();
             }
             localStorage.setItem(STORAGE_KEYS.editorCollapsed, willCollapse ? 'true' : 'false');
         });
@@ -702,7 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const delta = event.clientY - startY;
             editorHeight = clampNumber(startHeight + delta, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
             editorContent.style.height = `${editorHeight}px`;
-            refreshEditorAfterLayout(activeEditorId);
+            refreshActiveEditors();
         });
 
         window.addEventListener('mouseup', () => {
@@ -710,7 +830,7 @@ document.addEventListener('DOMContentLoaded', () => {
             resizingEditors = false;
             document.body.classList.remove('resizing-vertical');
             localStorage.setItem(STORAGE_KEYS.editorHeight, Math.round(editorHeight));
-            refreshEditorAfterLayout(activeEditorId);
+            refreshActiveEditors();
         });
     }
 
@@ -744,9 +864,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (editorTabs.length) {
-        setActiveEditor(activeEditorId);
-    }
+    initializeEditorGroups();
+    refreshActiveEditors();
 
     const positiveColorStops = [
         { stop: 0, rgb: [255, 250, 165] },
@@ -1230,54 +1349,330 @@ document.addEventListener('DOMContentLoaded', () => {
             editor.setSize(null, '100%');
         };
 
-        codeEditors.propagationLogic = CodeMirror.fromTextArea(controls.propagationLogic, {
-            mode: 'javascript',
-            theme: 'darcula',
-            lineNumbers: true,
-            lineWrapping: true,
-            autoCloseBrackets: true,
-            styleActiveLine: true,
-        });
-        applySizing(codeEditors.propagationLogic);
-        codeEditors.propagationLogic.on('change', scheduleRun);
+        const createEditor = (id, control) => {
+            if (!control) return null;
+            const instance = CodeMirror.fromTextArea(control, {
+                mode: 'javascript',
+                theme: 'darcula',
+                lineNumbers: true,
+                lineWrapping: true,
+                autoCloseBrackets: true,
+                styleActiveLine: true,
+            });
+            applySizing(instance);
+            instance.on('change', scheduleRun);
+            return instance;
+        };
 
-        codeEditors.colorLogic = CodeMirror.fromTextArea(controls.colorLogic, {
-            mode: 'javascript',
-            theme: 'darcula',
-            lineNumbers: true,
-            lineWrapping: true,
-            autoCloseBrackets: true,
-            styleActiveLine: true,
-        });
-        applySizing(codeEditors.colorLogic);
-        codeEditors.colorLogic.on('change', scheduleRun);
-
-        codeEditors.hdrLogic = CodeMirror.fromTextArea(controls.hdrLogic, {
-            mode: 'javascript',
-            theme: 'darcula',
-            lineNumbers: true,
-            lineWrapping: true,
-            autoCloseBrackets: true,
-            styleActiveLine: true,
-        });
-        applySizing(codeEditors.hdrLogic);
-        codeEditors.hdrLogic.on('change', scheduleRun);
-
-        if (editorTabs.length) {
-            setActiveEditor(activeEditorId);
-        }
+        codeEditors.propagationPrimaryLogic = createEditor('propagationPrimaryLogic', controls.propagationPrimary);
+        codeEditors.propagationSecondaryLogic = createEditor('propagationSecondaryLogic', controls.propagationSecondary);
+        codeEditors.effectiveValueLogic = createEditor('effectiveValueLogic', controls.effectiveValueLogic);
+        codeEditors.backpropLogic = createEditor('backpropLogic', controls.backpropLogic);
+        codeEditors.colorLogic = createEditor('colorLogic', controls.colorLogic);
+        codeEditors.hdrLogic = createEditor('hdrLogic', controls.hdrLogic);
+        refreshActiveEditors();
     } else {
-        controls.propagationLogic.addEventListener('input', scheduleRun);
-        controls.colorLogic.addEventListener('input', scheduleRun);
-        controls.hdrLogic.addEventListener('input', scheduleRun);
+        [
+            controls.propagationPrimary,
+            controls.propagationSecondary,
+            controls.effectiveValueLogic,
+            controls.backpropLogic,
+            controls.colorLogic,
+            controls.hdrLogic,
+        ].forEach(control => {
+            if (control) control.addEventListener('input', scheduleRun);
+        });
+    }
+
+    function getDimensionDefaults(key) {
+        if (!config.dimensionDefaults) return {};
+        return config.dimensionDefaults[key] || {};
+    }
+
+    function createEmptyDimensionState(key) {
+        const defaults = getDimensionDefaults(key);
+        return {
+            value: Number.isFinite(defaults.value) ? defaults.value : 0,
+            isActive: defaults.isActive === true,
+            contributors: Number.isFinite(defaults.contributors) ? defaults.contributors : 0,
+            meta: [],
+        };
+    }
+
+    function createInitialDimensions() {
+        const dimensions = {};
+        if (!Array.isArray(config.propagationDimensions)) return dimensions;
+        config.propagationDimensions.forEach(dimension => {
+            dimensions[dimension.key] = {
+                value: Number.isFinite(dimension.defaultValue) ? dimension.defaultValue : 0,
+                isActive: dimension.defaultActive === true,
+                contributors: dimension.defaultActive ? 1 : 0,
+                meta: [],
+            };
+        });
+        return dimensions;
+    }
+
+    function cloneDimensions(dimensions) {
+        if (!dimensions) return {};
+        const clone = {};
+        Object.entries(dimensions).forEach(([key, payload]) => {
+            clone[key] = {
+                value: Number.isFinite(payload?.value) ? payload.value : 0,
+                isActive: Boolean(payload?.isActive),
+                contributors: Number.isFinite(payload?.contributors) ? payload.contributors : 0,
+                meta: Array.isArray(payload?.meta) ? payload.meta.slice() : [],
+            };
+        });
+        return clone;
+    }
+
+    function normalizeDimensionResult(raw) {
+        if (raw === null || raw === undefined) return null;
+        if (typeof raw === 'number') {
+            if (!Number.isFinite(raw)) return null;
+            return { value: raw, isActive: true, contributors: 1, meta: [] };
+        }
+        if (typeof raw === 'object') {
+            const value = Number.isFinite(raw.value) ? raw.value : 0;
+            const isActive = raw.isActive !== false;
+            const contributors = Number.isFinite(raw.contributors) ? raw.contributors : 1;
+            let meta = [];
+            if (raw.meta !== undefined) {
+                meta = Array.isArray(raw.meta) ? raw.meta.slice() : [raw.meta];
+            }
+            return { value, isActive, contributors, meta };
+        }
+        return null;
+    }
+
+    function combineValuesByReunification(values, strategy) {
+        if (!values.length) return 0;
+        switch (strategy) {
+            case 'average':
+                return values.reduce((sum, value) => sum + value, 0) / values.length;
+            case 'max':
+                return Math.max(...values);
+            case 'sum':
+            default:
+                return values.reduce((sum, value) => sum + value, 0);
+        }
+    }
+
+    function mergeIncomingDimensionResults(incoming, reunification) {
+        const aggregates = new Map();
+        incoming.forEach(entry => {
+            const dimensionResults = entry.dimensions || {};
+            Object.entries(dimensionResults).forEach(([key, result]) => {
+                if (!aggregates.has(key)) {
+                    aggregates.set(key, { values: [], activeCount: 0, contributors: 0, meta: [] });
+                }
+                const bucket = aggregates.get(key);
+                if (result && Number.isFinite(result.value)) {
+                    bucket.values.push(result.value);
+                    bucket.contributors += Number.isFinite(result.contributors) ? result.contributors : 1;
+                }
+                if (result && result.isActive) bucket.activeCount += 1;
+                if (result && result.meta) {
+                    const meta = Array.isArray(result.meta) ? result.meta : [result.meta];
+                    bucket.meta.push(...meta.filter(item => item !== undefined));
+                }
+            });
+        });
+        if (Array.isArray(config.propagationDimensions)) {
+            config.propagationDimensions.forEach(dimension => {
+                if (!aggregates.has(dimension.key)) {
+                    aggregates.set(dimension.key, { values: [], activeCount: 0, contributors: 0, meta: [] });
+                }
+            });
+        }
+        aggregates.forEach(bucket => {
+            bucket.value = combineValuesByReunification(bucket.values, reunification);
+            if (!Number.isFinite(bucket.contributors) || bucket.contributors <= 0) {
+                bucket.contributors = bucket.values.length;
+            }
+        });
+        return aggregates;
+    }
+
+    function finalizeDimensionAggregates(aggregates) {
+        const result = {};
+        aggregates.forEach((bucket, key) => {
+            result[key] = {
+                value: Number.isFinite(bucket.value) ? bucket.value : 0,
+                isActive: bucket.activeCount > 0,
+                contributors: Number.isFinite(bucket.contributors) ? bucket.contributors : (bucket.values?.length || 0),
+                meta: Array.isArray(bucket.meta) ? bucket.meta.slice() : [],
+            };
+        });
+        return result;
+    }
+
+    function mergeDimensionStates(existing, incoming) {
+        const base = cloneDimensions(existing);
+        Object.entries(incoming || {}).forEach(([key, addition]) => {
+            const current = base[key] || createEmptyDimensionState(key);
+            const valueDelta = Number.isFinite(addition?.value) ? addition.value : 0;
+            current.value += valueDelta;
+            current.isActive = current.isActive || Boolean(addition?.isActive);
+            const contributorDelta = Number.isFinite(addition?.contributors) ? addition.contributors : (valueDelta !== 0 ? 1 : 0);
+            current.contributors += contributorDelta;
+            if (Array.isArray(addition?.meta) && addition.meta.length) {
+                current.meta.push(...addition.meta);
+            }
+            base[key] = current;
+        });
+        return base;
+    }
+
+    function evaluateEffectiveValue(dimensions, context = {}) {
+        const safeDimensions = dimensions || {};
+        try {
+            if (typeof config.effectiveValueFn === 'function') {
+                const dimensionKeys = Array.isArray(config.propagationDimensions)
+                    ? config.propagationDimensions.map(d => d.key)
+                    : Object.keys(safeDimensions);
+                const result = config.effectiveValueFn(safeDimensions, { ...context, dimensionKeys });
+                if (Number.isFinite(result)) return result;
+            }
+        } catch (error) {
+            console.warn('Effective value logic error', error);
+        }
+        const primary = safeDimensions.primary;
+        if (primary && Number.isFinite(primary.value)) return primary.value;
+        const fallbackKey = Object.keys(safeDimensions)[0];
+        if (fallbackKey) {
+            const candidate = safeDimensions[fallbackKey];
+            if (candidate && Number.isFinite(candidate.value)) return candidate.value;
+        }
+        return 0;
+    }
+
+    function buildBackpropState(nodeKey, node) {
+        return {
+            key: nodeKey,
+            value: Number.isFinite(node.value) ? node.value : 0,
+            dimensions: cloneDimensions(node.dimensions || createInitialDimensions()),
+            generation: node.gen,
+        };
+    }
+
+    function accumulateNodeUpdate(container, nodeKey, update) {
+        if (!update || typeof update !== 'object') return;
+        if (!container.has(nodeKey)) {
+            container.set(nodeKey, {
+                valueDelta: 0,
+                valueOverride: null,
+                dimensions: new Map(),
+            });
+        }
+        const entry = container.get(nodeKey);
+        if (typeof update.valueOverride === 'number' && Number.isFinite(update.valueOverride)) {
+            entry.valueOverride = update.valueOverride;
+        } else if (typeof update.valueDelta === 'number' && Number.isFinite(update.valueDelta)) {
+            entry.valueDelta += update.valueDelta;
+        }
+        if (update.dimensions && typeof update.dimensions === 'object') {
+            Object.entries(update.dimensions).forEach(([key, delta]) => {
+                const numericDelta = Number(delta);
+                if (!Number.isFinite(numericDelta)) return;
+                entry.dimensions.set(key, (entry.dimensions.get(key) || 0) + numericDelta);
+            });
+        }
+    }
+
+    function applyAccumulatedUpdates(updateMap, step) {
+        updateMap.forEach((descriptor, nodeKey) => {
+            const node = grid.get(nodeKey);
+            if (!node) return;
+            if (!node.dimensions) node.dimensions = createInitialDimensions();
+            if (descriptor.dimensions.size) {
+                const deltaState = {};
+                descriptor.dimensions.forEach((delta, dimKey) => {
+                    deltaState[dimKey] = {
+                        value: delta,
+                        isActive: Math.abs(delta) > 1e-9,
+                        contributors: 1,
+                        meta: [],
+                    };
+                });
+                node.dimensions = mergeDimensionStates(node.dimensions, deltaState);
+            }
+            if (descriptor.valueOverride !== null && Number.isFinite(descriptor.valueOverride)) {
+                node.value = descriptor.valueOverride;
+            } else {
+                node.value += descriptor.valueDelta;
+            }
+            node.value = evaluateEffectiveValue(node.dimensions, {
+                key: nodeKey,
+                generation: node.gen,
+                phase: 'backprop',
+                step,
+            });
+        });
+    }
+
+    function applyBackpropagation(steps) {
+        if (!Number.isFinite(steps) || steps <= 0 || typeof config.backpropFn !== 'function') return;
+        const generationBuckets = new Map();
+        grid.forEach((node, key) => {
+            if (!generationBuckets.has(node.gen)) generationBuckets.set(node.gen, []);
+            generationBuckets.get(node.gen).push([key, node]);
+        });
+        const generations = Array.from(generationBuckets.keys()).sort((a, b) => b - a);
+
+        for (let step = 0; step < steps; step++) {
+            const parentUpdates = new Map();
+            const childUpdates = new Map();
+
+            generations.forEach(generation => {
+                const nodes = generationBuckets.get(generation) || [];
+                nodes.forEach(([childKey, childNode]) => {
+                    if (!Array.isArray(childNode.parents) || !childNode.parents.length) return;
+                    childNode.parents.forEach(parentKey => {
+                        const parentNode = grid.get(parentKey);
+                        if (!parentNode) return;
+                        let result = null;
+                        try {
+                            result = config.backpropFn(
+                                buildBackpropState(childKey, childNode),
+                                buildBackpropState(parentKey, parentNode),
+                                {
+                                    generation,
+                                    step,
+                                    totalSteps: steps,
+                                    childKey,
+                                    parentKey,
+                                }
+                            );
+                        } catch (error) {
+                            console.warn('Backprop logic error', error);
+                        }
+                        if (!result) return;
+                        if (result.parent) accumulateNodeUpdate(parentUpdates, parentKey, result.parent);
+                        if (result.child) accumulateNodeUpdate(childUpdates, childKey, result.child);
+                    });
+                });
+            });
+
+            applyAccumulatedUpdates(parentUpdates, step);
+            applyAccumulatedUpdates(childUpdates, step);
+        }
     }
 
     function generateGrid() {
         grid.clear();
         selectedNodeKey = null;
         const startNodeKey = "0,0";
+        const rootDimensions = createInitialDimensions();
+        const rootValue = evaluateEffectiveValue(rootDimensions, {
+            key: startNodeKey,
+            generation: 0,
+            phase: 'seed',
+        });
         grid.set(startNodeKey, {
-            value: 1.0,
+            value: rootValue,
+            dimensions: rootDimensions,
             gen: 0,
             parents: [],
             children: [],
@@ -1285,34 +1680,69 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         let frontier = new Set([startNodeKey]);
 
-        for (let i = 0; i < config.generations; i++) {
+        for (let generationIndex = 0; generationIndex < config.generations; generationIndex++) {
             const nextFrontier = new Set();
             const contributions = new Map();
-            for (const nodeKey of frontier) {
-                const node = grid.get(nodeKey);
-                if (!node) continue;
-                const [x, y] = nodeKey.split(',').map(Number);
-                
-                config.moves.forEach((move, index) => {
-                    const valueToPass = config.propagate(node.value, index, move);
+
+            frontier.forEach(parentKey => {
+                const parentNode = grid.get(parentKey);
+                if (!parentNode) return;
+                const [x, y] = parentKey.split(',').map(Number);
+                const parentDimensions = cloneDimensions(parentNode.dimensions);
+
+                config.moves.forEach((move, moveIndex) => {
                     const childX = x + move[0];
                     const childY = y + move[1];
                     const childKey = `${childX},${childY}`;
-                    if (!Array.isArray(node.children)) node.children = [];
-                    if (!node.children.includes(childKey)) node.children.push(childKey);
+                    const dimensionResults = {};
+
+                    if (Array.isArray(config.propagationDimensions)) {
+                        config.propagationDimensions.forEach(dimension => {
+                            let output = null;
+                            try {
+                                output = dimension.fn(
+                                    parentNode.value,
+                                    parentDimensions,
+                                    moveIndex,
+                                    move,
+                                    {
+                                        parentKey,
+                                        parentGeneration: parentNode.gen,
+                                        moveIndex,
+                                        move,
+                                        generation: generationIndex,
+                                    }
+                                );
+                            } catch (error) {
+                                console.warn(`Propagation "${dimension.key}" error`, error);
+                                output = null;
+                            }
+                            dimensionResults[dimension.key] = normalizeDimensionResult(output);
+                        });
+                    }
+
+                    if (!Array.isArray(parentNode.children)) parentNode.children = [];
+                    if (!parentNode.children.includes(childKey)) parentNode.children.push(childKey);
                     if (!contributions.has(childKey)) contributions.set(childKey, []);
-                    contributions.get(childKey).push({ value: valueToPass, parentKey: nodeKey, moveIndex: index });
+                    contributions.get(childKey).push({
+                        parentKey,
+                        moveIndex,
+                        dimensions: dimensionResults,
+                    });
                 });
-            }
-            for (const [childKey, incoming] of contributions.entries()) {
-                const incomingValues = incoming.map(c => c.value);
-                const parentKeys = Array.from(new Set(incoming.map(c => c.parentKey)));
-                let finalValue = 0;
-                switch (config.reunification) {
-                    case 'sum': finalValue = incomingValues.reduce((a, b) => a + b, 0); break;
-                    case 'average': finalValue = incomingValues.reduce((a, b) => a + b, 0) / incomingValues.length; break;
-                    case 'max': finalValue = Math.max(...incomingValues); break;
-                }
+            });
+
+            contributions.forEach((incoming, childKey) => {
+                const parentKeys = Array.from(new Set(incoming.map(entry => entry.parentKey)));
+                const aggregates = mergeIncomingDimensionResults(incoming, config.reunification);
+                const childDimensions = finalizeDimensionAggregates(aggregates);
+                const effectiveValue = evaluateEffectiveValue(childDimensions, {
+                    key: childKey,
+                    parents: parentKeys,
+                    generation: generationIndex + 1,
+                    phase: 'forward',
+                });
+
                 let childPathMeta = null;
                 if (binaryEnumerationSupported) {
                     incoming.forEach(entry => {
@@ -1323,9 +1753,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         childPathMeta = mergePathMetas(childPathMeta, advanced);
                     });
                 }
+
                 if (grid.has(childKey)) {
                     const childNode = grid.get(childKey);
-                    childNode.value += finalValue;
+                    childNode.dimensions = mergeDimensionStates(childNode.dimensions, childDimensions);
+                    childNode.value = evaluateEffectiveValue(childNode.dimensions, {
+                        key: childKey,
+                        parents: parentKeys,
+                        generation: generationIndex + 1,
+                        phase: 'merge',
+                    });
                     if (!Array.isArray(childNode.parents)) childNode.parents = [];
                     parentKeys.forEach(parentKey => {
                         if (!childNode.parents.includes(parentKey)) childNode.parents.push(parentKey);
@@ -1335,16 +1772,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 } else {
                     grid.set(childKey, {
-                        value: finalValue,
-                        gen: i + 1,
+                        value: effectiveValue,
+                        dimensions: childDimensions,
+                        gen: generationIndex + 1,
                         parents: parentKeys,
                         children: [],
                         pathMeta: binaryEnumerationSupported ? childPathMeta : null,
                     });
                 }
+
                 nextFrontier.add(childKey);
-            }
+            });
+
             frontier = nextFrontier;
+        }
+
+        if (config.backpropSteps > 0 && typeof config.backpropFn === 'function') {
+            applyBackpropagation(config.backpropSteps);
         }
     }
 
@@ -1603,7 +2047,11 @@ document.addEventListener('DOMContentLoaded', () => {
         controls.moves.style.borderColor = '';
         controls.gradientMin.style.borderColor = '';
         controls.gradientMax.style.borderColor = '';
-        setEditorError('propagationLogic', false);
+        controls.backpropSteps.style.borderColor = '';
+        setEditorError('propagationPrimaryLogic', false);
+        setEditorError('propagationSecondaryLogic', false);
+        setEditorError('effectiveValueLogic', false);
+        setEditorError('backpropLogic', false);
         setEditorError('colorLogic', false);
         setEditorError('hdrLogic', false);
 
@@ -1613,6 +2061,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return false;
         }
 
+        let backpropSteps = parseInt(controls.backpropSteps.value, 10);
+        if (!Number.isFinite(backpropSteps) || backpropSteps < 0) {
+            controls.backpropSteps.style.borderColor = 'var(--error-color)';
+            return false;
+        }
+        backpropSteps = Math.min(Math.round(backpropSteps), 999);
+        controls.backpropSteps.value = backpropSteps;
+
         let moves;
         try {
             moves = JSON.parse(controls.moves.value);
@@ -1620,16 +2076,54 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.moves.style.borderColor = 'var(--error-color)';
             return false;
         }
-
-        const propagationSource = getCodeValue('propagationLogic');
-        let propagate;
-        try {
-            propagate = new Function('parentValue', 'index', 'move', `return (() => { ${propagationSource} })();`);
-            // quick validation to surface syntax errors early
-            propagate(1, 0, [0, 0]);
-        } catch (error) {
-            setEditorError('propagationLogic', true);
+        if (!Array.isArray(moves)) {
+            controls.moves.style.borderColor = 'var(--error-color)';
             return false;
+        }
+
+        const sampleDimensions = {
+            primary: { value: 1, isActive: true, contributors: 1, meta: [] },
+            secondary: { value: 0, isActive: false, contributors: 0, meta: [] },
+        };
+
+        const dimensionDefinitions = [
+            { key: 'primary', id: 'propagationPrimaryLogic', defaultValue: 1, defaultActive: true },
+            { key: 'secondary', id: 'propagationSecondaryLogic', defaultValue: 0, defaultActive: false },
+        ];
+
+        const propagationDimensions = [];
+        const propagationSources = {};
+        const dimensionDefaults = {};
+
+        for (const def of dimensionDefinitions) {
+            const source = getCodeValue(def.id);
+            let fn;
+            try {
+                fn = new Function('parentValue', 'parentDimensions', 'index', 'move', 'context', `return (() => { ${source} })();`);
+                fn(
+                    1,
+                    sampleDimensions,
+                    0,
+                    Array.isArray(moves[0]) ? moves[0] : [0, 0],
+                    { generation: 0, moveIndex: 0 }
+                );
+            } catch (error) {
+                setEditorError(def.id, true);
+                return false;
+            }
+            propagationDimensions.push({
+                key: def.key,
+                source,
+                fn,
+                defaultValue: def.defaultValue,
+                defaultActive: def.defaultActive,
+            });
+            propagationSources[def.key] = source;
+            dimensionDefaults[def.key] = {
+                value: def.defaultValue,
+                isActive: def.defaultActive,
+                contributors: def.defaultActive ? 1 : 0,
+            };
         }
 
         const gradientMode = controls.gradientMode.value;
@@ -1650,7 +2144,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             colorFn = new Function('value', 'stats', 'range', 'context', `return (() => { ${colorLogicSource} })();`);
             const hdrPreview = (input) => defaultHdrFunction(input, { scale: view.scale });
-            colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale, applyHDR: hdrPreview });
+            const colorTest = colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale, applyHDR: hdrPreview });
+            if (typeof colorTest !== 'string') throw new Error('Color logic must return a CSS string.');
         } catch (error) {
             setEditorError('colorLogic', true);
             return false;
@@ -1660,9 +2155,41 @@ document.addEventListener('DOMContentLoaded', () => {
         let hdrFn;
         try {
             hdrFn = new Function('input', 'context', `return (() => { ${hdrLogicSource} })();`);
-            hdrFn({ ratio: 0.5, value: 0.5, stats: { min: 0, max: 1 }, range: { min: -1, max: 1 }, polarity: 'positive', scale: view.scale }, { scale: view.scale });
+            const hdrTest = hdrFn(
+                { ratio: 0.5, value: 0.5, stats: { min: 0, max: 1 }, range: { min: -1, max: 1 }, polarity: 'positive', scale: view.scale },
+                { scale: view.scale }
+            );
+            if (!Number.isFinite(hdrTest)) throw new Error('HDR logic must return a finite number.');
         } catch (error) {
             setEditorError('hdrLogic', true);
+            return false;
+        }
+
+        const effectiveValueSource = getCodeValue('effectiveValueLogic');
+        let effectiveValueFn;
+        try {
+            effectiveValueFn = new Function('dimensions', 'context', `return (() => { ${effectiveValueSource} })();`);
+            const effectiveTest = effectiveValueFn(sampleDimensions, { phase: 'validation', dimensionKeys: ['primary', 'secondary'] });
+            if (!Number.isFinite(effectiveTest)) throw new Error('Effective value logic must return a finite number.');
+        } catch (error) {
+            setEditorError('effectiveValueLogic', true);
+            return false;
+        }
+
+        const backpropSource = getCodeValue('backpropLogic');
+        let backpropFn;
+        try {
+            backpropFn = new Function('childState', 'parentState', 'context', `return (() => { ${backpropSource} })();`);
+            const sampleResult = backpropFn(
+                { key: 'child', value: 1, dimensions: sampleDimensions, generation: 1 },
+                { key: 'parent', value: 0.5, dimensions: sampleDimensions, generation: 0 },
+                { generation: 1, step: 0, totalSteps: Math.max(backpropSteps, 1), childKey: 'child', parentKey: 'parent' }
+            );
+            if (sampleResult !== null && sampleResult !== undefined && typeof sampleResult !== 'object') {
+                throw new Error('Backpropagation function must return an object or null.');
+            }
+        } catch (error) {
+            setEditorError('backpropLogic', true);
             return false;
         }
 
@@ -1672,14 +2199,20 @@ document.addEventListener('DOMContentLoaded', () => {
             generations,
             reunification: controls.reunification.value,
             moves,
-            propagate,
-            propagationSource,
+            propagationDimensions,
+            propagationSources,
+            dimensionDefaults,
             gradientMode,
             gradientCustom,
             colorFn,
             colorLogicSource,
             hdrFn,
             hdrLogicSource,
+            effectiveValueFn,
+            effectiveValueSource,
+            backpropFn,
+            backpropSource,
+            backpropSteps,
             binaryEnumerationSupported,
         };
         return true;
@@ -1688,10 +2221,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateUIFromConfig() {
         controls.generations.value = config.generations;
         controls.reunification.value = config.reunification;
+        controls.backpropSteps.value = Number.isFinite(config.backpropSteps) ? config.backpropSteps : 0;
         controls.moves.value = JSON.stringify(config.moves, null, 2);
-        setCodeValue('propagationLogic', config.propagationSource || defaultPropagationSource);
+        const sources = config.propagationSources || {};
+        setCodeValue('propagationPrimaryLogic', sources.primary ?? defaultPropagationSources.primary);
+        setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
+        setCodeValue('effectiveValueLogic', config.effectiveValueSource || defaultEffectiveValueSource);
+        setCodeValue('backpropLogic', config.backpropSource || defaultBackpropLogicSource);
         controls.gradientMode.value = config.gradientMode || 'symmetric';
-        if (config.gradientMode === 'custom' && config.gradientCustom) {
+        if (controls.gradientMode.value === 'custom' && config.gradientCustom) {
             controls.gradientMin.value = config.gradientCustom.min;
             controls.gradientMax.value = config.gradientCustom.max;
         }
@@ -1774,12 +2312,15 @@ document.addEventListener('DOMContentLoaded', () => {
             generations: config.generations,
             reunification: config.reunification,
             moves: config.moves,
-            logic: config.propagationSource,
+            propagationSources: config.propagationSources,
+            effectiveValueLogic: config.effectiveValueSource,
+            backpropLogic: config.backpropSource,
+            backpropSteps: config.backpropSteps,
             gradientMode: config.gradientMode,
             gradientCustom: config.gradientCustom,
             colorLogic: config.colorLogicSource,
             hdrLogic: config.hdrLogicSource,
-            version: 2,
+            version: 3,
         };
         localStorage.setItem('gridSimProjects', JSON.stringify(projects));
         updateProjectList();
@@ -1794,7 +2335,12 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.generations.value = proj.generations;
             controls.reunification.value = proj.reunification;
             controls.moves.value = JSON.stringify(proj.moves, null, 2);
-            setCodeValue('propagationLogic', proj.logic || defaultPropagationSource);
+            const sources = proj.propagationSources || {};
+            setCodeValue('propagationPrimaryLogic', sources.primary ?? proj.logic ?? defaultPropagationSources.primary);
+            setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
+            setCodeValue('effectiveValueLogic', proj.effectiveValueLogic || defaultEffectiveValueSource);
+            setCodeValue('backpropLogic', proj.backpropLogic || defaultBackpropLogicSource);
+            controls.backpropSteps.value = Number.isFinite(proj.backpropSteps) ? proj.backpropSteps : 0;
             controls.gradientMode.value = proj.gradientMode || 'symmetric';
             if (controls.gradientMode.value === 'custom' && proj.gradientCustom) {
                 controls.gradientMin.value = proj.gradientCustom.min;
@@ -1833,21 +2379,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const presets = {
         pascal: {
             moves: `[[1, -1], [1, 1]]`,
-            logic: `return parentValue;`,
+            propagation: {
+                primary: `return parentValue;`,
+                secondary: defaultPropagationSources.secondary,
+            },
+            effective: `const primary = dimensions.primary?.value ?? 0;\nreturn primary;`,
+            backprop: defaultBackpropLogicSource,
+            backpropSteps: 0,
             gradientMode: 'symmetric',
             colorLogic: defaultColorLogicSource,
             hdrLogic: defaultHdrLogicSource,
         },
         divergent: {
             moves: `[[1, -1], [1, 1]]`,
-            logic: `if (index === 0) return parentValue + 0.2;\nelse return parentValue - 0.3;`,
+            propagation: {
+                primary: `const delta = index === 0 ? 0.2 : -0.3;\nreturn parentValue + delta;`,
+                secondary: defaultPropagationSources.secondary,
+            },
+            effective: defaultEffectiveValueSource,
+            backprop: defaultBackpropLogicSource,
+            backpropSteps: 0,
             gradientMode: 'symmetric',
             colorLogic: defaultColorLogicSource,
             hdrLogic: defaultHdrLogicSource,
         },
         backwards: {
             moves: `[[1, -1], [1, 1], [-2, 0]]`,
-            logic: `if(index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;`,
+            propagation: {
+                primary: `if (index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;`,
+                secondary: defaultPropagationSources.secondary,
+            },
+            effective: defaultEffectiveValueSource,
+            backprop: defaultBackpropLogicSource,
+            backpropSteps: 1,
             gradientMode: 'custom',
             gradientCustom: { min: -2, max: 2 },
             colorLogic: defaultColorLogicSource,
@@ -1855,14 +2419,26 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         decay: {
             moves: `[[1, -1], [1, 1]]`,
-            logic: `return parentValue * 0.8;`,
+            propagation: {
+                primary: `return parentValue * 0.8;`,
+                secondary: defaultPropagationSources.secondary,
+            },
+            effective: defaultEffectiveValueSource,
+            backprop: defaultBackpropLogicSource,
+            backpropSteps: 0,
             gradientMode: 'positive',
             colorLogic: defaultColorLogicSource,
             hdrLogic: defaultHdrLogicSource,
         },
         sierpinski: {
             moves: `[[1, -1], [1, 1]]`,
-            logic: `const parity = Math.abs(Math.round(parentValue)) % 2;\nreturn parity;`,
+            propagation: {
+                primary: `const parity = Math.abs(Math.round(parentValue)) % 2;\nreturn parity;`,
+                secondary: defaultPropagationSources.secondary,
+            },
+            effective: `return dimensions.primary?.value ?? 0;`,
+            backprop: defaultBackpropLogicSource,
+            backpropSteps: 0,
             gradientMode: 'custom',
             gradientCustom: { min: 0, max: 2 },
             colorLogic: `const parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(15, 18, 30)';`,
@@ -1880,7 +2456,13 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.reunification.value = preset.reunification;
         }
         controls.moves.value = preset.moves;
-        setCodeValue('propagationLogic', preset.logic);
+        if (preset.propagation) {
+            setCodeValue('propagationPrimaryLogic', preset.propagation.primary ?? defaultPropagationSources.primary);
+            setCodeValue('propagationSecondaryLogic', preset.propagation.secondary ?? defaultPropagationSources.secondary);
+        }
+        setCodeValue('effectiveValueLogic', preset.effective ?? defaultEffectiveValueSource);
+        setCodeValue('backpropLogic', preset.backprop ?? defaultBackpropLogicSource);
+        controls.backpropSteps.value = Number.isFinite(preset.backpropSteps) ? preset.backpropSteps : 0;
         controls.gradientMode.value = preset.gradientMode || 'symmetric';
         if (controls.gradientMode.value === 'custom' && preset.gradientCustom) {
             controls.gradientMin.value = preset.gradientCustom.min;
@@ -1893,8 +2475,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Event Listeners ---
-    ['generations', 'reunification', 'moves', 'gradientMin', 'gradientMax'].forEach(id => {
-        document.getElementById(id).addEventListener('input', scheduleRun);
+    ['generations', 'reunification', 'moves', 'gradientMin', 'gradientMax', 'backpropSteps'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.addEventListener('input', scheduleRun);
     });
 
     controls.gradientMode.addEventListener('change', () => {
