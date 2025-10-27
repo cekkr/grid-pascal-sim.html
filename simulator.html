@@ -399,6 +399,7 @@ return clamp01(result);</textarea>
                     <button id="presetDivergent">Divergent</button>
                     <button id="presetBackwards">Echo</button>
                     <button id="presetDecay">Decay</button>
+                    <button id="presetSierpinski">Sierpinski</button>
                 </div>
             </div>
 
@@ -448,6 +449,7 @@ document.addEventListener('DOMContentLoaded', () => {
         presetDivergent: document.getElementById('presetDivergent'),
         presetBackwards: document.getElementById('presetBackwards'),
         presetDecay: document.getElementById('presetDecay'),
+        presetSierpinski: document.getElementById('presetSierpinski'),
         inspectorCloseBtn: document.getElementById('inspector-close-btn'),
         gradientMode: document.getElementById('gradientMode'),
         gradientMin: document.getElementById('gradientMin'),
@@ -1374,9 +1376,25 @@ document.addEventListener('DOMContentLoaded', () => {
             colorLogic: defaultColorLogicSource,
             hdrLogic: defaultHdrLogicSource,
         },
+        sierpinski: {
+            moves: `[[1, -1], [1, 1]]`,
+            logic: `const parity = Math.abs(Math.round(parentValue)) % 2;\nreturn parity;`,
+            gradientMode: 'custom',
+            gradientCustom: { min: 0, max: 2 },
+            colorLogic: `const parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(15, 18, 30)';`,
+            hdrLogic: defaultHdrLogicSource,
+            generations: 180,
+            reunification: 'sum',
+        },
     };
 
     function loadPreset(preset) {
+        if (Number.isFinite(preset.generations)) {
+            controls.generations.value = preset.generations;
+        }
+        if (typeof preset.reunification === 'string') {
+            controls.reunification.value = preset.reunification;
+        }
         controls.moves.value = preset.moves;
         setCodeValue('propagationLogic', preset.logic);
         controls.gradientMode.value = preset.gradientMode || 'symmetric';
@@ -1407,6 +1425,7 @@ document.addEventListener('DOMContentLoaded', () => {
     controls.presetDivergent.onclick = () => loadPreset(presets.divergent);
     controls.presetBackwards.onclick = () => loadPreset(presets.backwards);
     controls.presetDecay.onclick = () => loadPreset(presets.decay);
+    controls.presetSierpinski.onclick = () => loadPreset(presets.sierpinski);
     controls.inspectorCloseBtn.onclick = () => { inspectorPanel.style.display = 'none'; selectedNodeKey = null; drawGrid(); };
     
     canvas.addEventListener('mousedown', e => { view.isDragging = true; view.lastX = e.clientX; view.lastY = e.clientY; });
