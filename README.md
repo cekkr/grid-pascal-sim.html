@@ -8,6 +8,7 @@ This project explores how values propagate across branching lattices such as Pas
 - Gradient controls that let you normalize colors symmetrically, clamp to positive/negative ranges, or enforce explicit min/max spans.
 - Built-in presets that reproduce classic Pascal behaviour, divergent amplification, echo feedback loops, and decay scenarios.
 - Inspector panel with clickable lineage and local-storage projects so you can hop between parents/children, save studies, and reload configurations between sessions.
+- Binary path analytics that surface C(n, k) counts, 0/1 distributions, and representative enumerations for each node.
 - Companion research notes inside `studies/` describing theoretical backgrounds and worked examples that inspired the simulator.
 
 ## Getting Started
@@ -39,7 +40,7 @@ This project explores how values propagate across branching lattices such as Pas
   Enter a project name to save the current configuration (including both logic scripts and gradient settings) into `localStorage`. Use the dropdown to reload or delete saved studies.
 
 - **Canvas Interaction**  
-  Click nodes to inspect coordinates, generation, value, parents, and children. Use the inspector’s lineage chips to jump directly to any parent or child. Drag to pan; scroll to zoom. The inspector can be dismissed via the close icon.
+  Click nodes to inspect coordinates, generation, value, parents, and children. The Binary Paths panel in the inspector derives C(n, k) counts and sample enumerations; set `ENABLE_HOVER_ENUMERATION_POPUP` to `true` in `simulator.html` to mirror those metrics in a hover popup. Use the inspector’s lineage chips to jump directly to any parent or child. Drag to pan; scroll to zoom. The inspector can be dismissed via the close icon.
 
 ## Crafting Custom Logic
 - **Propagation Function**  
@@ -55,6 +56,9 @@ Runtime errors inside either editor are surfaced by a red outline, and the simul
 - `studies/propagate-parentValue.md` dives deeper into how parent values influence downstream propagation in different scenarios.
 
 Review these notes alongside the simulator to bridge theoretical formulas with visual intuition.
+
+## Configuration Flags
+- `ENABLE_HOVER_ENUMERATION_POPUP`: when toggled to `true` in `simulator.html`, hovering a node (or its related chips in the inspector) shows a floating panel with the same binary enumeration breakdown rendered in the inspector.
 
 ## Extending the Project
 - Mirror the existing presets to distribute new case studies or to embed course material.

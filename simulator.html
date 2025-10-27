@@ -252,6 +252,11 @@
             cursor: pointer; font-weight: bold;
             pointer-events: auto;
         }
+        #inspector-panel h5 {
+            margin: 10px 0 6px;
+            font-size: 0.85em;
+            color: var(--primary-color);
+        }
         .inspector-node-links {
             display: inline-flex;
             flex-wrap: wrap;
@@ -278,6 +283,59 @@
             background-color: rgba(76, 130, 247, 0.2);
             border-color: var(--primary-color);
             outline: none;
+        }
+        .inspector-section {
+            margin-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            padding-top: 8px;
+        }
+        .inspector-section.hidden {
+            display: none;
+        }
+        .binary-stat {
+            display: block;
+            margin-bottom: 4px;
+        }
+        .binary-distribution {
+            font-size: 0.85em;
+            line-height: 1.35;
+            margin: 6px 0;
+        }
+        .binary-sample {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 4px;
+            overflow: scroll;
+        }
+        .binary-sample code {
+            background-color: rgba(255, 255, 255, 0.08);
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        .binary-note {
+            font-size: 0.8em;
+            opacity: 0.8;
+            margin-top: 4px;
+        }
+        #binaryHoverPopup {
+            position: fixed;
+            z-index: 1000;
+            max-width: 280px;
+            background-color: rgba(32, 32, 40, 0.95);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            color: var(--text-color);
+            font-size: 0.85em;
+            pointer-events: none;
+            display: none;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+        #binaryHoverPopup h5 {
+            margin: 0 0 6px 0;
+            font-size: 0.95em;
+            color: var(--primary-color);
         }
 
         #customGradientInputs {
@@ -451,6 +509,10 @@ return clamp01(result);</textarea>
                 <p><strong>Generation:</strong> <span id="inspector-gen"></span></p>
                 <p><strong>Parents:</strong> <span id="inspector-parents" class="inspector-node-links"></span></p>
                 <p><strong>Children:</strong> <span id="inspector-children" class="inspector-node-links"></span></p>
+                <div id="inspector-binary-section" class="inspector-section hidden">
+                    <h5>Binary Paths</h5>
+                    <div id="inspector-binary-content"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -460,6 +522,9 @@ return clamp01(result);</textarea>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/edit/closebrackets.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/selection/active-line.min.js"></script>
 <script>
+const ENABLE_HOVER_ENUMERATION_POPUP = false; // Set true to enable binary hover popups.
+const ENUMERATION_SAMPLE_LIMIT = 32;
+
 document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('gridCanvas');
     const ctx = canvas.getContext('2d');
@@ -470,6 +535,8 @@ document.addEventListener('DOMContentLoaded', () => {
         gen: document.getElementById('inspector-gen'),
         parents: document.getElementById('inspector-parents'),
         children: document.getElementById('inspector-children'),
+        binarySection: document.getElementById('inspector-binary-section'),
+        binaryContent: document.getElementById('inspector-binary-content'),
     };
     const controls = {
         generations: document.getElementById('generations'),
@@ -516,6 +583,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeEditorId = 'propagationLogic';
     let editorHeight = 240;
     let isEditorCollapsed = false;
+    let binaryEnumerationSupported = false;
+    let binaryHoverPopup = null;
+    let currentHoverNodeKey = null;
 
     if (editorContent) {
         const storedHeight = parseInt(localStorage.getItem(STORAGE_KEYS.editorHeight), 10);
@@ -831,6 +901,320 @@ document.addEventListener('DOMContentLoaded', () => {
         customGradientInputs.style.display = controls.gradientMode.value === 'custom' ? 'flex' : 'none';
     }
 
+    function createRootPathMeta() {
+        return {
+            depth: 0,
+            total: 1,
+            onesHistogram: { 0: 1 },
+            samples: [''],
+            sampleComplete: true,
+        };
+    }
+
+    function clonePathMeta(meta) {
+        if (!meta) return null;
+        return {
+            depth: meta.depth,
+            total: meta.total,
+            onesHistogram: Object.fromEntries(Object.entries(meta.onesHistogram || {}).map(([key, value]) => [Number(key), value])),
+            samples: Array.isArray(meta.samples) ? meta.samples.slice() : [],
+            sampleComplete: Boolean(meta.sampleComplete),
+        };
+    }
+
+    function advancePathMeta(parentMeta, branchIndex) {
+        if (!parentMeta || typeof parentMeta !== 'object') return null;
+        const nextDepth = parentMeta.depth + 1;
+        const onesIncrement = branchIndex === 1 ? 1 : 0;
+        const onesHistogram = {};
+        Object.entries(parentMeta.onesHistogram || {}).forEach(([key, count]) => {
+            const ones = Number(key);
+            const nextOnes = ones + onesIncrement;
+            onesHistogram[nextOnes] = (onesHistogram[nextOnes] || 0) + count;
+        });
+        let samples = [];
+        let sampleComplete = parentMeta.sampleComplete;
+        if (Array.isArray(parentMeta.samples) && parentMeta.samples.length) {
+            samples = parentMeta.samples.map(sample => `${sample}${branchIndex === 1 ? '1' : '0'}`);
+            if (samples.length > ENUMERATION_SAMPLE_LIMIT) {
+                samples = samples.slice(0, ENUMERATION_SAMPLE_LIMIT);
+                sampleComplete = false;
+            }
+        }
+        return {
+            depth: nextDepth,
+            total: parentMeta.total,
+            onesHistogram,
+            samples,
+            sampleComplete,
+        };
+    }
+
+    function mergeUniqueSamples(a = [], b = []) {
+        const merged = [...a, ...b];
+        const seen = new Set();
+        const result = [];
+        merged.forEach(sample => {
+            if (typeof sample !== 'string') return;
+            if (seen.has(sample)) return;
+            seen.add(sample);
+            result.push(sample);
+        });
+        return result.sort();
+    }
+
+    function mergePathMetas(baseMeta, additionMeta) {
+        if (!additionMeta) return baseMeta ? clonePathMeta(baseMeta) : null;
+        if (!baseMeta) return clonePathMeta(additionMeta);
+        const merged = {
+            depth: Math.max(baseMeta.depth, additionMeta.depth),
+            total: baseMeta.total + additionMeta.total,
+            onesHistogram: {},
+            samples: [],
+            sampleComplete: false,
+        };
+        const baseHistogram = baseMeta.onesHistogram || {};
+        const additionHistogram = additionMeta.onesHistogram || {};
+        Object.entries(baseHistogram).forEach(([key, count]) => {
+            const numericKey = Number(key);
+            merged.onesHistogram[numericKey] = (merged.onesHistogram[numericKey] || 0) + count;
+        });
+        Object.entries(additionHistogram).forEach(([key, count]) => {
+            const numericKey = Number(key);
+            merged.onesHistogram[numericKey] = (merged.onesHistogram[numericKey] || 0) + count;
+        });
+        const combinedSamples = mergeUniqueSamples(baseMeta.samples || [], additionMeta.samples || []);
+        if (combinedSamples.length <= ENUMERATION_SAMPLE_LIMIT && baseMeta.sampleComplete && additionMeta.sampleComplete && merged.total <= ENUMERATION_SAMPLE_LIMIT) {
+            merged.samples = combinedSamples;
+            merged.sampleComplete = combinedSamples.length === merged.total;
+        } else {
+            merged.samples = combinedSamples.slice(0, ENUMERATION_SAMPLE_LIMIT);
+            merged.sampleComplete = false;
+        }
+        return merged;
+    }
+
+    function prepareBinaryInfo(nodeKey) {
+        if (!binaryEnumerationSupported) {
+            return { supported: false, reason: 'Binary enumeration is available only when two moves are defined.' };
+        }
+        if (!nodeKey || !grid.has(nodeKey)) {
+            return { supported: false, reason: 'Node unavailable for binary analysis.' };
+        }
+        const node = grid.get(nodeKey);
+        if (!node || !node.pathMeta) {
+            return { supported: false, reason: 'Binary path metadata not generated for this node.' };
+        }
+        const meta = node.pathMeta;
+        const histogramEntries = Object.entries(meta.onesHistogram || {}).map(([onesKey, count]) => {
+            const ones = Number(onesKey);
+            const zeros = Math.max(0, meta.depth - ones);
+            return { ones, zeros, count };
+        }).sort((a, b) => a.ones - b.ones);
+        const minOnes = histogramEntries.length ? histogramEntries[0].ones : 0;
+        const maxOnes = histogramEntries.length ? histogramEntries[histogramEntries.length - 1].ones : 0;
+        const minZeros = histogramEntries.length ? Math.max(0, meta.depth - maxOnes) : meta.depth;
+        const maxZeros = histogramEntries.length ? Math.max(0, meta.depth - minOnes) : meta.depth;
+        return {
+            supported: true,
+            nodeKey,
+            meta,
+            depth: meta.depth,
+            totalPaths: meta.total,
+            histogramEntries,
+            minOnes,
+            maxOnes,
+            minZeros,
+            maxZeros,
+            samples: Array.isArray(meta.samples) ? meta.samples : [],
+            sampleComplete: Boolean(meta.sampleComplete),
+        };
+    }
+
+    function updateInspectorBinarySection(nodeKey) {
+        if (!inspectorFields.binarySection || !inspectorFields.binaryContent) return;
+        if (!nodeKey) {
+            inspectorFields.binarySection.classList.add('hidden');
+            inspectorFields.binaryContent.textContent = '';
+            return;
+        }
+        const info = prepareBinaryInfo(nodeKey);
+        const fragment = document.createDocumentFragment();
+        if (!info.supported) {
+            inspectorFields.binarySection.classList.remove('hidden');
+            const note = document.createElement('div');
+            note.className = 'binary-note';
+            note.textContent = info.reason;
+            fragment.appendChild(note);
+            inspectorFields.binaryContent.innerHTML = '';
+            inspectorFields.binaryContent.appendChild(fragment);
+            return;
+        }
+        inspectorFields.binarySection.classList.remove('hidden');
+        const stats = document.createElement('div');
+        stats.className = 'binary-stat';
+        stats.innerHTML = `<strong>Total paths:</strong> ${info.totalPaths.toLocaleString()}`;
+        fragment.appendChild(stats);
+
+        const depthStat = document.createElement('div');
+        depthStat.className = 'binary-stat';
+        depthStat.innerHTML = `<strong>Depth:</strong> ${info.depth}`;
+        fragment.appendChild(depthStat);
+
+        const ratioStat = document.createElement('div');
+        ratioStat.className = 'binary-stat';
+        const zerosRange = info.minZeros === info.maxZeros
+            ? `${info.minZeros}`
+            : `${info.minZeros} – ${info.maxZeros}`;
+        const onesRange = info.minOnes === info.maxOnes
+            ? `${info.minOnes}`
+            : `${info.minOnes} – ${info.maxOnes}`;
+        ratioStat.innerHTML = `<strong>0s:</strong> ${zerosRange} &nbsp;•&nbsp; <strong>1s:</strong> ${onesRange}`;
+        fragment.appendChild(ratioStat);
+
+        if (info.histogramEntries.length) {
+            const distribution = document.createElement('div');
+            distribution.className = 'binary-distribution';
+            distribution.innerHTML = info.histogramEntries.map(entry => {
+                return `C(${info.depth}, ${entry.ones}) = <strong>${entry.count.toLocaleString()}</strong> (1s=${entry.ones}, 0s=${entry.zeros})`;
+            }).join('<br>');
+            fragment.appendChild(distribution);
+        }
+
+        if (info.samples.length) {
+            const sampleLabel = document.createElement('div');
+            sampleLabel.className = 'binary-stat';
+            sampleLabel.innerHTML = '<strong>Enumerations:</strong>';
+            fragment.appendChild(sampleLabel);
+            const sampleContainer = document.createElement('div');
+            sampleContainer.className = 'binary-sample';
+            info.samples.forEach(sample => {
+                const code = document.createElement('code');
+                code.textContent = sample || '∅';
+                sampleContainer.appendChild(code);
+            });
+            fragment.appendChild(sampleContainer);
+            if (!info.sampleComplete) {
+                const note = document.createElement('div');
+                note.className = 'binary-note';
+                note.textContent = `Showing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.`;
+                fragment.appendChild(note);
+            }
+        } else if (info.totalPaths > 0) {
+            const note = document.createElement('div');
+            note.className = 'binary-note';
+            note.textContent = 'Enumeration list omitted to maintain performance.';
+            fragment.appendChild(note);
+        }
+
+        inspectorFields.binaryContent.innerHTML = '';
+        inspectorFields.binaryContent.appendChild(fragment);
+    }
+
+    function ensureBinaryHoverPopup() {
+        if (binaryHoverPopup) return binaryHoverPopup;
+        const popup = document.createElement('div');
+        popup.id = 'binaryHoverPopup';
+        document.body.appendChild(popup);
+        binaryHoverPopup = popup;
+        return popup;
+    }
+
+    function hideBinaryHoverPopup() {
+        if (!binaryHoverPopup) return;
+        binaryHoverPopup.style.display = 'none';
+        binaryHoverPopup.textContent = '';
+        currentHoverNodeKey = null;
+    }
+
+    function showBinaryHoverPopup(nodeKey, position) {
+        const popup = ensureBinaryHoverPopup();
+        const info = prepareBinaryInfo(nodeKey);
+        if (!info.supported) {
+            hideBinaryHoverPopup();
+            return;
+        }
+        currentHoverNodeKey = nodeKey;
+        const lines = [];
+        lines.push(`<h5>Node ${nodeKey}</h5>`);
+        lines.push(`<div class="binary-stat"><strong>Depth:</strong> ${info.depth}</div>`);
+        lines.push(`<div class="binary-stat"><strong>Total paths:</strong> ${info.totalPaths.toLocaleString()}</div>`);
+        if (info.histogramEntries.length) {
+            const distribution = info.histogramEntries.map(entry => `C(${info.depth}, ${entry.ones}) = <strong>${entry.count.toLocaleString()}</strong> (1s=${entry.ones}, 0s=${entry.zeros})`).join('<br>');
+            lines.push(`<div class="binary-distribution">${distribution}</div>`);
+        }
+        if (info.samples.length) {
+            const sampleChips = info.samples.slice(0, 8).map(sample => `<code>${sample || '∅'}</code>`).join(' ');
+            lines.push(`<div class="binary-sample">${sampleChips}</div>`);
+            if (!info.sampleComplete) {
+                lines.push(`<div class="binary-note">Previewing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.</div>`);
+            }
+        } else if (info.totalPaths > 0) {
+            lines.push('<div class="binary-note">Enumeration list omitted to maintain performance.</div>');
+        }
+        popup.innerHTML = lines.join('');
+        popup.style.display = 'block';
+        const offsetX = 16;
+        const offsetY = 16;
+        const posX = Math.min(position.x + offsetX, window.innerWidth - popup.offsetWidth - 12);
+        const posY = Math.min(position.y + offsetY, window.innerHeight - popup.offsetHeight - 12);
+        popup.style.left = `${Math.max(12, posX)}px`;
+        popup.style.top = `${Math.max(12, posY)}px`;
+    }
+
+    function getElementAnchorPosition(element) {
+        if (!element || !(element instanceof Element)) {
+            return { x: 0, y: 0 };
+        }
+        const rect = element.getBoundingClientRect();
+        return { x: rect.right, y: rect.top + rect.height / 2 };
+    }
+
+    function handleInspectorHover(event) {
+        if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
+        const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
+        if (!target) {
+            hideBinaryHoverPopup();
+            return;
+        }
+        const nodeKey = target.dataset.nodeKey;
+        if (!nodeKey) return;
+        showBinaryHoverPopup(nodeKey, getElementAnchorPosition(target));
+    }
+
+    function handleInspectorFocus(event) {
+        if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
+        const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
+        if (!target) {
+            hideBinaryHoverPopup();
+            return;
+        }
+        const nodeKey = target.dataset.nodeKey;
+        if (!nodeKey) return;
+        showBinaryHoverPopup(nodeKey, getElementAnchorPosition(target));
+    }
+
+    function handleInspectorBlur(event) {
+        if (!ENABLE_HOVER_ENUMERATION_POPUP) return;
+        const related = event.relatedTarget;
+        if (related && inspectorPanel.contains(related)) return;
+        hideBinaryHoverPopup();
+    }
+
+    function handleCanvasBinaryHover(event) {
+        if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
+        if (view.isDragging) {
+            hideBinaryHoverPopup();
+            return;
+        }
+        const nodeKey = findNodeAt(event.clientX, event.clientY);
+        if (!nodeKey) {
+            hideBinaryHoverPopup();
+            return;
+        }
+        showBinaryHoverPopup(nodeKey, { x: event.clientX, y: event.clientY });
+    }
+
     let runHandle = null;
     function scheduleRun() {
         if (runHandle) cancelAnimationFrame(runHandle);
@@ -892,7 +1276,13 @@ document.addEventListener('DOMContentLoaded', () => {
         grid.clear();
         selectedNodeKey = null;
         const startNodeKey = "0,0";
-        grid.set(startNodeKey, { value: 1.0, gen: 0, parents: [], children: [] });
+        grid.set(startNodeKey, {
+            value: 1.0,
+            gen: 0,
+            parents: [],
+            children: [],
+            pathMeta: binaryEnumerationSupported ? createRootPathMeta() : null,
+        });
         let frontier = new Set([startNodeKey]);
 
         for (let i = 0; i < config.generations; i++) {
@@ -911,7 +1301,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!Array.isArray(node.children)) node.children = [];
                     if (!node.children.includes(childKey)) node.children.push(childKey);
                     if (!contributions.has(childKey)) contributions.set(childKey, []);
-                    contributions.get(childKey).push({value: valueToPass, parentKey: nodeKey});
+                    contributions.get(childKey).push({ value: valueToPass, parentKey: nodeKey, moveIndex: index });
                 });
             }
             for (const [childKey, incoming] of contributions.entries()) {
@@ -923,6 +1313,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'average': finalValue = incomingValues.reduce((a, b) => a + b, 0) / incomingValues.length; break;
                     case 'max': finalValue = Math.max(...incomingValues); break;
                 }
+                let childPathMeta = null;
+                if (binaryEnumerationSupported) {
+                    incoming.forEach(entry => {
+                        const parentNode = grid.get(entry.parentKey);
+                        if (!parentNode || !parentNode.pathMeta) return;
+                        const advanced = advancePathMeta(parentNode.pathMeta, entry.moveIndex);
+                        if (!advanced) return;
+                        childPathMeta = mergePathMetas(childPathMeta, advanced);
+                    });
+                }
                 if (grid.has(childKey)) {
                     const childNode = grid.get(childKey);
                     childNode.value += finalValue;
@@ -930,8 +1330,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     parentKeys.forEach(parentKey => {
                         if (!childNode.parents.includes(parentKey)) childNode.parents.push(parentKey);
                     });
+                    if (binaryEnumerationSupported && childPathMeta) {
+                        childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
+                    }
                 } else {
-                    grid.set(childKey, { value: finalValue, gen: i + 1, parents: parentKeys, children: [] });
+                    grid.set(childKey, {
+                        value: finalValue,
+                        gen: i + 1,
+                        parents: parentKeys,
+                        children: [],
+                        pathMeta: binaryEnumerationSupported ? childPathMeta : null,
+                    });
                 }
                 nextFrontier.add(childKey);
             }
@@ -1257,6 +1666,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return false;
         }
 
+        binaryEnumerationSupported = Array.isArray(moves) && moves.length === 2;
+
         config = {
             generations,
             reunification: controls.reunification.value,
@@ -1269,6 +1680,7 @@ document.addEventListener('DOMContentLoaded', () => {
             colorLogicSource,
             hdrFn,
             hdrLogicSource,
+            binaryEnumerationSupported,
         };
         return true;
     }
@@ -1286,6 +1698,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
         setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
         toggleCustomGradientInputs();
+        binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
+        config.binaryEnumerationSupported = binaryEnumerationSupported;
     }
 
     function run() {
@@ -1293,6 +1707,8 @@ document.addEventListener('DOMContentLoaded', () => {
             generateGrid();
             drawGrid();
             inspectorPanel.style.display = 'none';
+            updateInspectorBinarySection(null);
+            if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
         }
     }
     
@@ -1314,7 +1730,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateInspectorPanel(nodeKey) {
         if (!nodeKey || !grid.has(nodeKey)) {
             inspectorPanel.style.display = 'none';
+            updateInspectorBinarySection(null);
             return;
+        }
+        if (ENABLE_HOVER_ENUMERATION_POPUP) {
+            hideBinaryHoverPopup();
         }
         const node = grid.get(nodeKey);
         if (inspectorFields.coords) inspectorFields.coords.textContent = `(${nodeKey})`;
@@ -1322,6 +1742,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (inspectorFields.gen) inspectorFields.gen.textContent = node.gen;
         renderInspectorNodeLinks(inspectorFields.parents, Array.isArray(node.parents) ? node.parents : []);
         renderInspectorNodeLinks(inspectorFields.children, Array.isArray(node.children) ? node.children : []);
+        updateInspectorBinarySection(nodeKey);
         inspectorPanel.style.display = 'block';
     }
 
@@ -1489,7 +1910,12 @@ document.addEventListener('DOMContentLoaded', () => {
     controls.presetBackwards.onclick = () => loadPreset(presets.backwards);
     controls.presetDecay.onclick = () => loadPreset(presets.decay);
     controls.presetSierpinski.onclick = () => loadPreset(presets.sierpinski);
-    controls.inspectorCloseBtn.onclick = () => { inspectorPanel.style.display = 'none'; selectedNodeKey = null; drawGrid(); };
+    controls.inspectorCloseBtn.onclick = () => {
+        inspectorPanel.style.display = 'none';
+        selectedNodeKey = null;
+        updateInspectorBinarySection(null);
+        drawGrid();
+    };
     inspectorPanel.addEventListener('click', (event) => {
         const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
         if (!target) return;
@@ -1511,6 +1937,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateInspectorPanel(nodeKey);
         drawGrid();
     });
+    if (ENABLE_HOVER_ENUMERATION_POPUP) {
+        inspectorPanel.addEventListener('mouseover', handleInspectorHover);
+        inspectorPanel.addEventListener('focusin', handleInspectorFocus);
+        inspectorPanel.addEventListener('focusout', handleInspectorBlur);
+        inspectorPanel.addEventListener('mouseleave', hideBinaryHoverPopup);
+    }
     
     canvas.addEventListener('mousedown', e => { view.isDragging = true; view.lastX = e.clientX; view.lastY = e.clientY; });
     canvas.addEventListener('mouseup', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
@@ -1524,6 +1956,11 @@ document.addEventListener('DOMContentLoaded', () => {
         view.lastY = e.clientY;
         drawGrid();
     });
+    if (ENABLE_HOVER_ENUMERATION_POPUP) {
+        canvas.addEventListener('mousemove', handleCanvasBinaryHover);
+        canvas.addEventListener('mouseleave', hideBinaryHoverPopup);
+        canvas.addEventListener('mousedown', hideBinaryHoverPopup);
+    }
     canvas.addEventListener('wheel', e => {
         e.preventDefault();
         const scaleAmount = e.deltaY < 0 ? 1.1 : 1 / 1.1;
