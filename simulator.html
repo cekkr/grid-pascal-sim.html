@@ -402,6 +402,7 @@
                     <option value="sum" selected>Sum</option>
                     <option value="average">Average</option>
                     <option value="max">Maximum</option>
+                    <option value="personalized">Custom</option>
                 </select>
                 <label for="backpropSteps">Backpropagation Steps (optional)</label>
                 <input type="number" id="backpropSteps" value="0" min="0" max="50" step="1">
@@ -473,6 +474,19 @@ return {
     parent: { valueDelta: delta },
     child: { valueDelta: -delta * 0.25 },
 };</textarea>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="editor-section" data-editor-group="reunification" id="reunificationEditorSection" style="display: none;">
+                        <div class="editor-section-header">
+                            <h4>Custom Reunification</h4>
+                        </div>
+                        <div class="editor-panes">
+                            <div class="editor-pane active" data-editor-pane="reunificationLogic">
+                                <label for="reunificationLogic">Reunification Function(values, context)</label>
+                                <textarea id="reunificationLogic">// values: number[]; context: { count, sum, average, min, max }
+const { sum } = context;
+return sum;</textarea>
                             </div>
                         </div>
                     </section>
@@ -637,6 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const controls = {
         generations: document.getElementById('generations'),
         reunification: document.getElementById('reunification'),
+        reunificationLogic: document.getElementById('reunificationLogic'),
         backpropSteps: document.getElementById('backpropSteps'),
         moves: document.getElementById('moves'),
         propagationPrimary: document.getElementById('propagationPrimaryLogic'),
@@ -718,6 +733,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const customGradientInputs = document.getElementById('customGradientInputs');
+    const reunificationEditorSection = document.getElementById('reunificationEditorSection');
     const codeEditors = {};
     const defaultColorLogicSource = controls.colorLogic.value;
     const defaultHdrLogicSource = controls.hdrLogic.value;
@@ -725,6 +741,7 @@ document.addEventListener('DOMContentLoaded', () => {
         primary: controls.propagationPrimary ? controls.propagationPrimary.value : '',
         secondary: controls.propagationSecondary ? controls.propagationSecondary.value : '',
     };
+    const defaultReunificationLogicSource = controls.reunificationLogic ? controls.reunificationLogic.value : '';
     const defaultEffectiveValueSource = controls.effectiveValueLogic ? controls.effectiveValueLogic.value : '';
     const defaultBackpropLogicSource = controls.backpropLogic ? controls.backpropLogic.value : '';
 
@@ -1027,6 +1044,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function toggleCustomGradientInputs() {
         customGradientInputs.style.display = controls.gradientMode.value === 'custom' ? 'flex' : 'none';
+    }
+
+    function toggleReunificationEditor() {
+        if (!reunificationEditorSection) return;
+        const isPersonalized = controls.reunification.value === 'personalized';
+        reunificationEditorSection.style.display = isPersonalized ? '' : 'none';
+        if (isPersonalized) {
+            ensureEditorExpanded();
+            if (editorGroups.has('reunification')) {
+                setActiveEditor('reunification', 'reunificationLogic');
+                refreshActiveEditors();
+            }
+        }
     }
 
     function createRootPathMeta() {
@@ -1382,6 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
         codeEditors.propagationSecondaryLogic = createEditor('propagationSecondaryLogic', controls.propagationSecondary);
         codeEditors.effectiveValueLogic = createEditor('effectiveValueLogic', controls.effectiveValueLogic);
         codeEditors.backpropLogic = createEditor('backpropLogic', controls.backpropLogic);
+        codeEditors.reunificationLogic = createEditor('reunificationLogic', controls.reunificationLogic);
         codeEditors.colorLogic = createEditor('colorLogic', controls.colorLogic);
         codeEditors.hdrLogic = createEditor('hdrLogic', controls.hdrLogic);
         refreshActiveEditors();
@@ -1391,6 +1422,7 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.propagationSecondary,
             controls.effectiveValueLogic,
             controls.backpropLogic,
+            controls.reunificationLogic,
             controls.colorLogic,
             controls.hdrLogic,
         ].forEach(control => {
@@ -1460,8 +1492,39 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    function combineValuesByReunification(values, strategy) {
+    function buildReunificationContext(values) {
+        const count = values.length;
+        if (!count) {
+            return { count: 0, sum: 0, average: 0, min: 0, max: 0 };
+        }
+        let sum = 0;
+        let min = values[0];
+        let max = values[0];
+        for (let i = 0; i < count; i++) {
+            const value = values[i];
+            sum += value;
+            if (value < min) min = value;
+            if (value > max) max = value;
+        }
+        const average = sum / count;
+        return { count, sum, average, min, max };
+    }
+
+    function combineValuesByReunification(values, strategy, customFn) {
         if (!values.length) return 0;
+        if (strategy === 'personalized') {
+            const safeValues = values.slice();
+            const context = buildReunificationContext(safeValues);
+            if (typeof customFn === 'function') {
+                try {
+                    const result = customFn(safeValues, context);
+                    if (Number.isFinite(result)) return result;
+                } catch (error) {
+                    console.warn('Custom reunification logic error', error);
+                }
+            }
+            return context.sum;
+        }
         switch (strategy) {
             case 'average':
                 return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -1473,7 +1536,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function mergeIncomingDimensionResults(incoming, reunification) {
+    function mergeIncomingDimensionResults(incoming, reunification, customFn) {
         const aggregates = new Map();
         incoming.forEach(entry => {
             const dimensionResults = entry.dimensions || {};
@@ -1501,7 +1564,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         aggregates.forEach(bucket => {
-            bucket.value = combineValuesByReunification(bucket.values, reunification);
+            bucket.value = combineValuesByReunification(bucket.values, reunification, customFn);
             if (!Number.isFinite(bucket.contributors) || bucket.contributors <= 0) {
                 bucket.contributors = bucket.values.length;
             }
@@ -1748,7 +1811,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             contributions.forEach((incoming, childKey) => {
                 const parentKeys = Array.from(new Set(incoming.map(entry => entry.parentKey)));
-                const aggregates = mergeIncomingDimensionResults(incoming, config.reunification);
+                const aggregates = mergeIncomingDimensionResults(incoming, config.reunification, config.reunificationFn);
                 const childDimensions = finalizeDimensionAggregates(aggregates);
                 const effectiveValue = evaluateEffectiveValue(childDimensions, {
                     key: childKey,
@@ -2066,6 +2129,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setEditorError('propagationSecondaryLogic', false);
         setEditorError('effectiveValueLogic', false);
         setEditorError('backpropLogic', false);
+        setEditorError('reunificationLogic', false);
         setEditorError('colorLogic', false);
         setEditorError('hdrLogic', false);
 
@@ -2207,11 +2271,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return false;
         }
 
+        const reunificationMode = controls.reunification.value;
+        const reunificationSource = getCodeValue('reunificationLogic');
+        let reunificationFn = null;
+        if (reunificationMode === 'personalized') {
+            try {
+                reunificationFn = new Function('values', 'context', `return (() => { ${reunificationSource} })();`);
+                const sampleValues = [1, -0.5, 0.25];
+                const sampleResult = reunificationFn(sampleValues.slice(), buildReunificationContext(sampleValues));
+                if (!Number.isFinite(sampleResult)) throw new Error('Custom reunification must return a finite number.');
+            } catch (error) {
+                setEditorError('reunificationLogic', true);
+                return false;
+            }
+        }
+
         binaryEnumerationSupported = Array.isArray(moves) && moves.length === 2;
 
         config = {
             generations,
             reunification: controls.reunification.value,
+            reunificationFn,
+            reunificationSource,
             moves,
             propagationDimensions,
             propagationSources,
@@ -2235,6 +2316,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateUIFromConfig() {
         controls.generations.value = config.generations;
         controls.reunification.value = config.reunification;
+        setCodeValue('reunificationLogic', config.reunificationSource || defaultReunificationLogicSource);
         controls.backpropSteps.value = Number.isFinite(config.backpropSteps) ? config.backpropSteps : 0;
         controls.moves.value = JSON.stringify(config.moves, null, 2);
         const sources = config.propagationSources || {};
@@ -2250,6 +2332,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
         setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
         toggleCustomGradientInputs();
+        toggleReunificationEditor();
         binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
         config.binaryEnumerationSupported = binaryEnumerationSupported;
     }
@@ -2325,6 +2408,7 @@ document.addEventListener('DOMContentLoaded', () => {
         projects[name] = {
             generations: config.generations,
             reunification: config.reunification,
+            reunificationLogic: config.reunificationSource,
             moves: config.moves,
             propagationSources: config.propagationSources,
             effectiveValueLogic: config.effectiveValueSource,
@@ -2348,6 +2432,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const proj = projects[name];
             controls.generations.value = proj.generations;
             controls.reunification.value = proj.reunification;
+            setCodeValue('reunificationLogic', proj.reunificationLogic || defaultReunificationLogicSource);
             controls.moves.value = JSON.stringify(proj.moves, null, 2);
             const sources = proj.propagationSources || {};
             setCodeValue('propagationPrimaryLogic', sources.primary ?? proj.logic ?? defaultPropagationSources.primary);
@@ -2364,6 +2449,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setCodeValue('hdrLogic', proj.hdrLogic || defaultHdrLogicSource);
             controls.projectName.value = name;
             toggleCustomGradientInputs();
+            toggleReunificationEditor();
             scheduleRun();
         }
     }
@@ -2469,6 +2555,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof preset.reunification === 'string') {
             controls.reunification.value = preset.reunification;
         }
+        setCodeValue('reunificationLogic', preset.reunificationLogic || defaultReunificationLogicSource);
         controls.moves.value = preset.moves;
         if (preset.propagation) {
             setCodeValue('propagationPrimaryLogic', preset.propagation.primary ?? defaultPropagationSources.primary);
@@ -2485,14 +2572,22 @@ document.addEventListener('DOMContentLoaded', () => {
         setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
         setCodeValue('hdrLogic', preset.hdrLogic || defaultHdrLogicSource);
         toggleCustomGradientInputs();
+        toggleReunificationEditor();
         scheduleRun();
     }
 
     // --- Event Listeners ---
-    ['generations', 'reunification', 'moves', 'gradientMin', 'gradientMax', 'backpropSteps'].forEach(id => {
+    ['generations', 'moves', 'gradientMin', 'gradientMax', 'backpropSteps'].forEach(id => {
         const element = document.getElementById(id);
         if (element) element.addEventListener('input', scheduleRun);
     });
+
+    if (controls.reunification) {
+        controls.reunification.addEventListener('change', () => {
+            toggleReunificationEditor();
+            scheduleRun();
+        });
+    }
 
     controls.gradientMode.addEventListener('change', () => {
         toggleCustomGradientInputs();
@@ -2575,6 +2670,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Initial Load ---
     updateProjectList();
     toggleCustomGradientInputs();
+    toggleReunificationEditor();
     run();
 });
 </script>
