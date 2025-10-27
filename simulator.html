@@ -2268,6 +2268,9 @@ class GridSimulatorApp {
                             childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
                         }
                     } else {
+                        const splKey = childKey.split(',');
+                        const childX = parseInt(splKey[0]);
+                        const childY = parseInt(splKey[1]);
                         const baseCoords = { x: childX, y: childY, z: 0 };
                         const customPosition = computeNodePositionOverride(childKey, baseCoords, {
                             generation: generationIndex + 1,
