@@ -1,5 +1,7 @@
 # Advanced Grid Propagation Simulator
 
+![](https://github.com/cekkr/grid-pascal-sim.html/blob/main/assets/presentation-graph.png?raw=true)
+
 The Advanced Grid Propagation Simulator is a single-page exploration lab for lattices that branch, recombine, and optionally backpropagate corrections. Everything lives inside `simulator.html`, but the page now ships with a richer control surface, tabbed logic editors backed by CodeMirror, persistent layout settings, and upgraded analytics that make it easier to reason about Pascal-like systems and their more exotic cousins.
 
 ## Highlights
