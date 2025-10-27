@@ -34,7 +34,7 @@
         }
 
         #controls {
-            width: 380px;
+            width: 450px;
             min-width: 260px;
             max-width: 720px;
             padding: 15px;
@@ -274,8 +274,10 @@
             color: var(--text-color);
             font-size: 0.9em;
             display: none; /* Hidden by default */
-            width: 250px;
+            width: 300px;
             pointer-events: auto;
+
+            max-height: 90vh;
         }
         #inspector-panel .close-btn {
             position: absolute;
@@ -318,7 +320,7 @@
         .inspector-section {
             margin-top: 10px;
             border-top: 1px solid rgba(255, 255, 255, 0.08);
-            padding-top: 8px;
+            padding-top: 8px;            
         }
         .inspector-section.hidden {
             display: none;
@@ -330,14 +332,21 @@
         .binary-distribution {
             font-size: 0.85em;
             line-height: 1.35;
-            margin: 6px 0;
+            margin: 6px 0;            
         }
+
+        .binary-flex {
+            overflow-y: auto;
+            overflow-x: hidden;
+            max-height: min(240px, 40vh);
+            padding-right: 4px;
+        }
+
         .binary-sample {
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
-            margin-top: 4px;
-            overflow: scroll;
+            margin-top: 4px;                          
         }
         .binary-sample code {
             background-color: rgba(255, 255, 255, 0.08);
@@ -1200,11 +1209,14 @@ document.addEventListener('DOMContentLoaded', () => {
             fragment.appendChild(distribution);
         }
 
+        const binaryFlex = document.createElement('div');
+        binaryFlex.className = 'binary-flex';        
+
         if (info.samples.length) {
             const sampleLabel = document.createElement('div');
             sampleLabel.className = 'binary-stat';
             sampleLabel.innerHTML = '<strong>Enumerations:</strong>';
-            fragment.appendChild(sampleLabel);
+            binaryFlex.appendChild(sampleLabel);
             const sampleContainer = document.createElement('div');
             sampleContainer.className = 'binary-sample';
             info.samples.forEach(sample => {
@@ -1212,19 +1224,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 code.textContent = sample || '∅';
                 sampleContainer.appendChild(code);
             });
-            fragment.appendChild(sampleContainer);
+            binaryFlex.appendChild(sampleContainer);
             if (!info.sampleComplete) {
                 const note = document.createElement('div');
                 note.className = 'binary-note';
                 note.textContent = `Showing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.`;
-                fragment.appendChild(note);
+                binaryFlex.appendChild(note);
             }
         } else if (info.totalPaths > 0) {
             const note = document.createElement('div');
             note.className = 'binary-note';
             note.textContent = 'Enumeration list omitted to maintain performance.';
-            fragment.appendChild(note);
+            binaryFlex.appendChild(note);
         }
+
+        fragment.appendChild(binaryFlex)
 
         inspectorFields.binaryContent.innerHTML = '';
         inspectorFields.binaryContent.appendChild(fragment);
