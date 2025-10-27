@@ -1361,7 +1361,7 @@ class GridSimulatorApp {
         const VIEW_CULL_PADDING = 1.5;
 
         function getNodeRadius() {
-            return Math.max(0.2, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
+            return Math.max(0.5, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
         }
 
         function getEdgeWidth() {
@@ -3406,7 +3406,7 @@ class GridSimulatorApp {
         }
         canvas.addEventListener('wheel', e => {
             e.preventDefault();
-            const scaleAmount = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+            const scaleAmount = e.deltaY < 0 ? 1.05 : 1 / 1.05;
             view.scale *= scaleAmount;
             drawGrid();
         });
