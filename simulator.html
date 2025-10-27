@@ -195,6 +195,9 @@ const safeMax = range.max > 0 ? range.max : 1;
 const safeMin = range.min < 0 ? range.min : -1;
 const viewScale = (context && typeof context.scale === 'number') ? context.scale : 1;
 const intensity = viewScale < 1 ? Math.min(1.6, Math.pow(1 / Math.max(viewScale, 0.0001), 0.3)) : 1;
+const applyHDR = (context && typeof context.applyHDR === 'function')
+    ? context.applyHDR
+    : ((input) => clamp01(input.ratio));
 
 const sampleStops = (stops, ratio) => {
     const clamped = clamp01(ratio);
@@ -230,11 +233,25 @@ const negativeStops = [
 ];
 
 if (value >= 0) {
-    const ratio = enhanceRatio(value / safeMax);
+    const hdrRatio = applyHDR({ ratio: value / safeMax, value, stats, range, polarity: 'positive', scale: viewScale });
+    const ratio = enhanceRatio(hdrRatio);
     return toCss(sampleStops(positiveStops, ratio));
 }
-const ratio = enhanceRatio(Math.abs(value / safeMin));
+const hdrRatio = applyHDR({ ratio: Math.abs(value / safeMin), value, stats, range, polarity: 'negative', scale: viewScale });
+const ratio = enhanceRatio(hdrRatio);
 return toCss(sampleStops(negativeStops, ratio));</textarea>
+                <label for="hdrLogic">HDR Mapping Function(input, context)</label>
+                <textarea id="hdrLogic">const clamp01 = (num) => Math.min(Math.max(num, 0), 1);
+const { ratio, scale } = input;
+const base = clamp01(ratio);
+const shoulder = Math.log1p(base * 8) / Math.log1p(8);
+const gamma = Math.pow(base, 0.025);
+const mix = 0.9;
+let result = (1 - mix) * shoulder + mix * gamma;
+if (scale && scale < 1) {
+    result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
+}
+return clamp01(result);</textarea>
             </div>
             
             <div class="control-group">
@@ -298,12 +315,14 @@ document.addEventListener('DOMContentLoaded', () => {
         gradientMin: document.getElementById('gradientMin'),
         gradientMax: document.getElementById('gradientMax'),
         colorLogic: document.getElementById('colorLogic'),
+        hdrLogic: document.getElementById('hdrLogic'),
     };
 
     const customGradientInputs = document.getElementById('customGradientInputs');
     const codeEditors = {};
     const defaultColorLogicSource = controls.colorLogic.value;
     const defaultPropagationSource = controls.propagationLogic.value;
+    const defaultHdrLogicSource = controls.hdrLogic.value;
 
     const positiveColorStops = [
         { stop: 0, rgb: [255, 250, 165] },
@@ -342,6 +361,24 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     const rgbArrayToCss = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
+    const clampRatio = (value) => Math.min(Math.max(value, 0), 1);
+
+    const defaultHdrFunction = (input, context = {}) => {
+        if (!input) return 0;
+        const scale = (context && typeof context.scale === 'number' && Number.isFinite(context.scale))
+            ? context.scale
+            : 1;
+        const base = clamp01(input.ratio ?? 0);
+        const shoulder = Math.log1p(base * 8) / Math.log1p(8);
+        const gamma = Math.pow(base, 0.75);
+        const mix = 0.35;
+        let result = (1 - mix) * shoulder + mix * gamma;
+        if (scale < 1) {
+            result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
+        }
+        return clampRatio(result);
+    };
+
     const defaultColorFunction = (value, stats, range, context = {}) => {
         const safeMax = range.max > 0 ? range.max : 1;
         const safeMin = range.min < 0 ? range.min : -1;
@@ -352,11 +389,17 @@ document.addEventListener('DOMContentLoaded', () => {
             ? Math.min(1.6, Math.pow(1 / Math.max(scale, 0.0001), 0.3))
             : 1;
 
+        const applyHDR = (context && typeof context.applyHDR === 'function')
+            ? context.applyHDR
+            : (input) => defaultHdrFunction(input, { scale });
+
         if (value >= 0) {
-            const ratio = accentuateRatio(value / safeMax, intensity);
+            const hdrRatio = clampRatio(applyHDR({ ratio: value / safeMax, value, stats, range, polarity: 'positive', scale }));
+            const ratio = accentuateRatio(hdrRatio, intensity);
             return rgbArrayToCss(sampleColorStops(positiveColorStops, ratio));
         }
-        const ratio = accentuateRatio(Math.abs(value / safeMin), intensity);
+        const hdrRatio = clampRatio(applyHDR({ ratio: Math.abs(value / safeMin), value, stats, range, polarity: 'negative', scale }));
+        const ratio = accentuateRatio(hdrRatio, intensity);
         return rgbArrayToCss(sampleColorStops(negativeColorStops, ratio));
     };
     let config = {};
@@ -367,6 +410,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const MIN_PIXEL_NODE_RADIUS = 3;
     const MIN_PIXEL_EDGE_WIDTH = 0.6;
     const MIN_PIXEL_SELECTION_WIDTH = 1.8;
+    const EDGE_RENDER_SCALE_THRESHOLD = 0.9;
+    const AGGREGATION_SCALE_THRESHOLD = 6;
+    const AGGREGATION_BUCKET_PIXELS = 8;
+    const VIEW_CULL_PADDING = 1.5;
 
     function getNodeRadius() {
         return Math.max(0.2, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
@@ -444,9 +491,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         codeEditors.propagationLogic.on('change', scheduleRun);
         codeEditors.colorLogic.on('change', scheduleRun);
+        codeEditors.hdrLogic = CodeMirror.fromTextArea(controls.hdrLogic, {
+            mode: 'javascript',
+            theme: 'darcula',
+            lineNumbers: true,
+            lineWrapping: true,
+            autoCloseBrackets: true,
+            styleActiveLine: true,
+        });
+        codeEditors.hdrLogic.on('change', scheduleRun);
     } else {
         controls.propagationLogic.addEventListener('input', scheduleRun);
         controls.colorLogic.addEventListener('input', scheduleRun);
+        controls.hdrLogic.addEventListener('input', scheduleRun);
     }
 
     function generateGrid() {
@@ -502,38 +559,128 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const stats = computeGridStats();
         const gradientRange = resolveGradientRange(stats);
-        const colorContext = { scale: view.scale };
-        const edgeWidth = getEdgeWidth();
         const nodeRadius = getNodeRadius();
         const selectionWidth = getSelectionWidth();
+        const edgeWidth = getEdgeWidth();
+        const safeScale = Math.max(view.scale, 0.0001);
 
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-        ctx.lineWidth = edgeWidth;
-        for (const [key, node] of grid.entries()) {
-             const [x1, y1] = key.split(',').map(Number);
-             node.parents.forEach(parentKey => {
-                if (grid.has(parentKey)) {
-                   const [x0, y0] = parentKey.split(',').map(Number);
-                   ctx.beginPath();
-                   ctx.moveTo(x0, y0);
-                   ctx.lineTo(x1, y1);
-                   ctx.stroke();
+        const hdrContext = { scale: view.scale };
+        const applyHDR = (input) => {
+            try {
+                if (config.hdrFn) {
+                    const result = config.hdrFn(input, hdrContext);
+                    if (Number.isFinite(result)) return clampRatio(result);
                 }
-            });
-        }
+            } catch (error) {
+                console.warn('HDR logic error', error);
+            }
+            return defaultHdrFunction(input, hdrContext);
+        };
+        const colorContext = { scale: view.scale, applyHDR, clusterSize: 1 };
+
+        const padding = nodeRadius + VIEW_CULL_PADDING;
+        const halfWidth = canvas.width / 2;
+        const halfHeight = canvas.height / 2;
+        const viewport = {
+            minX: (-halfWidth - view.offsetX) / safeScale - padding,
+            maxX: (halfWidth - view.offsetX) / safeScale + padding,
+            minY: (-halfHeight - view.offsetY) / safeScale - padding,
+            maxY: (halfHeight - view.offsetY) / safeScale + padding,
+        };
+
+        const shouldAggregate = view.scale < AGGREGATION_SCALE_THRESHOLD;
+        const renderEdges = !shouldAggregate && view.scale >= EDGE_RENDER_SCALE_THRESHOLD;
+        const visibleNodes = new Map();
+        const aggregatedBuckets = new Map();
+
+        const bucketWorldSize = shouldAggregate
+            ? Math.max(AGGREGATION_BUCKET_PIXELS / safeScale, nodeRadius * 2)
+            : 0;
 
         for (const [key, node] of grid.entries()) {
             const [x, y] = key.split(',').map(Number);
-            ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
-            ctx.beginPath();
-            ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI);
-            ctx.fill();
-            if (key === selectedNodeKey) {
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = selectionWidth;
-                ctx.stroke();
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-                ctx.lineWidth = edgeWidth;
+            if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
+
+            if (shouldAggregate) {
+                const bucketX = Math.round(x / bucketWorldSize);
+                const bucketY = Math.round(y / bucketWorldSize);
+                const bucketKey = `${bucketX},${bucketY}`;
+                let bucket = aggregatedBuckets.get(bucketKey);
+                if (!bucket) {
+                    bucket = { xSum: 0, ySum: 0, valueSum: 0, count: 0, maxValue: -Infinity, minValue: Infinity };
+                    aggregatedBuckets.set(bucketKey, bucket);
+                }
+                bucket.xSum += x;
+                bucket.ySum += y;
+                bucket.valueSum += node.value;
+                bucket.count += 1;
+                bucket.maxValue = Math.max(bucket.maxValue, node.value);
+                bucket.minValue = Math.min(bucket.minValue, node.value);
+            } else {
+                visibleNodes.set(key, { node, x, y });
+            }
+        }
+
+        if (renderEdges && visibleNodes.size) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.lineWidth = edgeWidth;
+            for (const [key, entry] of visibleNodes.entries()) {
+                const { node, x: x1, y: y1 } = entry;
+                for (const parentKey of node.parents) {
+                    const parent = visibleNodes.get(parentKey);
+                    if (!parent) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(parent.x, parent.y);
+                    ctx.lineTo(x1, y1);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        if (shouldAggregate) {
+            for (const bucket of aggregatedBuckets.values()) {
+                const avgX = bucket.xSum / bucket.count;
+                const avgY = bucket.ySum / bucket.count;
+                const averageValue = bucket.valueSum / bucket.count;
+                const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
+                const blend = Math.min(0.7, bucket.count / 12);
+                const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
+                const sizeBoost = Math.min(3, Math.sqrt(bucket.count));
+                const adjustedRadius = Math.max(nodeRadius, nodeRadius * sizeBoost);
+                colorContext.clusterSize = bucket.count;
+                ctx.fillStyle = getNodeColor(displayValue, stats, gradientRange, colorContext);
+                ctx.beginPath();
+                ctx.arc(avgX, avgY, adjustedRadius, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+
+            if (selectedNodeKey && grid.has(selectedNodeKey)) {
+                const [sx, sy] = selectedNodeKey.split(',').map(Number);
+                if (sx >= viewport.minX && sx <= viewport.maxX && sy >= viewport.minY && sy <= viewport.maxY) {
+                    const node = grid.get(selectedNodeKey);
+                    colorContext.clusterSize = 1;
+                    ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, Math.max(nodeRadius, nodeRadius * 1.25), 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = selectionWidth;
+                    ctx.stroke();
+                }
+            }
+        } else {
+            colorContext.clusterSize = 1;
+            for (const [key, entry] of visibleNodes.entries()) {
+                const { node, x, y } = entry;
+                ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
+                ctx.beginPath();
+                ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI);
+                ctx.fill();
+                if (key === selectedNodeKey) {
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = selectionWidth;
+                    ctx.stroke();
+                }
             }
         }
         ctx.restore();
@@ -598,6 +745,7 @@ document.addEventListener('DOMContentLoaded', () => {
         controls.gradientMax.style.borderColor = '';
         setEditorError('propagationLogic', false);
         setEditorError('colorLogic', false);
+        setEditorError('hdrLogic', false);
 
         const generations = parseInt(controls.generations.value, 10);
         if (!Number.isFinite(generations) || generations < 1) {
@@ -641,9 +789,20 @@ document.addEventListener('DOMContentLoaded', () => {
         let colorFn;
         try {
             colorFn = new Function('value', 'stats', 'range', 'context', `return (() => { ${colorLogicSource} })();`);
-            colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale });
+            const hdrPreview = (input) => defaultHdrFunction(input, { scale: view.scale });
+            colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale, applyHDR: hdrPreview });
         } catch (error) {
             setEditorError('colorLogic', true);
+            return false;
+        }
+
+        const hdrLogicSource = getCodeValue('hdrLogic');
+        let hdrFn;
+        try {
+            hdrFn = new Function('input', 'context', `return (() => { ${hdrLogicSource} })();`);
+            hdrFn({ ratio: 0.5, value: 0.5, stats: { min: 0, max: 1 }, range: { min: -1, max: 1 }, polarity: 'positive', scale: view.scale }, { scale: view.scale });
+        } catch (error) {
+            setEditorError('hdrLogic', true);
             return false;
         }
 
@@ -657,6 +816,8 @@ document.addEventListener('DOMContentLoaded', () => {
             gradientCustom,
             colorFn,
             colorLogicSource,
+            hdrFn,
+            hdrLogicSource,
         };
         return true;
     }
@@ -672,6 +833,7 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.gradientMax.value = config.gradientCustom.max;
         }
         setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
+        setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
         toggleCustomGradientInputs();
     }
 
@@ -687,7 +849,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const rect = canvas.getBoundingClientRect();
         const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / view.scale;
         const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / view.scale;
-        const hitRadius = Math.max(getNodeRadius(), 0.3);
+        const aggregationMultiplier = view.scale < AGGREGATION_SCALE_THRESHOLD
+            ? Math.min(3, Math.max(1.5, AGGREGATION_SCALE_THRESHOLD / Math.max(view.scale, 0.1)))
+            : 1;
+        const hitRadius = Math.max(getNodeRadius() * aggregationMultiplier, 0.3);
         for (const [key, node] of grid.entries()) {
             const [nodeX, nodeY] = key.split(',').map(Number);
             if (Math.hypot(gridX - nodeX, gridY - nodeY) < hitRadius) return key;
@@ -721,6 +886,7 @@ document.addEventListener('DOMContentLoaded', () => {
             gradientMode: config.gradientMode,
             gradientCustom: config.gradientCustom,
             colorLogic: config.colorLogicSource,
+            hdrLogic: config.hdrLogicSource,
             version: 2,
         };
         localStorage.setItem('gridSimProjects', JSON.stringify(projects));
@@ -743,6 +909,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 controls.gradientMax.value = proj.gradientCustom.max;
             }
             setCodeValue('colorLogic', proj.colorLogic || defaultColorLogicSource);
+            setCodeValue('hdrLogic', proj.hdrLogic || defaultHdrLogicSource);
             controls.projectName.value = name;
             toggleCustomGradientInputs();
             scheduleRun();
@@ -777,12 +944,14 @@ document.addEventListener('DOMContentLoaded', () => {
             logic: `return parentValue;`,
             gradientMode: 'symmetric',
             colorLogic: defaultColorLogicSource,
+            hdrLogic: defaultHdrLogicSource,
         },
         divergent: {
             moves: `[[1, -1], [1, 1]]`,
             logic: `if (index === 0) return parentValue + 0.2;\nelse return parentValue - 0.3;`,
             gradientMode: 'symmetric',
             colorLogic: defaultColorLogicSource,
+            hdrLogic: defaultHdrLogicSource,
         },
         backwards: {
             moves: `[[1, -1], [1, 1], [-2, 0]]`,
@@ -790,12 +959,14 @@ document.addEventListener('DOMContentLoaded', () => {
             gradientMode: 'custom',
             gradientCustom: { min: -2, max: 2 },
             colorLogic: defaultColorLogicSource,
+            hdrLogic: defaultHdrLogicSource,
         },
         decay: {
             moves: `[[1, -1], [1, 1]]`,
             logic: `return parentValue * 0.8;`,
             gradientMode: 'positive',
             colorLogic: defaultColorLogicSource,
+            hdrLogic: defaultHdrLogicSource,
         },
     };
 
@@ -808,6 +979,7 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.gradientMax.value = preset.gradientCustom.max;
         }
         setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
+        setCodeValue('hdrLogic', preset.hdrLogic || defaultHdrLogicSource);
         toggleCustomGradientInputs();
         scheduleRun();
     }
