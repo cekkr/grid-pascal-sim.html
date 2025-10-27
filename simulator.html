@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Advanced Grid Propagation Simulator</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/lib/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/theme/darcula.min.css">
     <style>
         :root {
             --bg-color: #1a1a1d;
@@ -85,6 +87,20 @@
         textarea { font-family: "Courier New", monospace; resize: vertical; }
         #propagationLogic { height: 120px; }
 
+        .editor-container {
+            position: relative;
+        }
+        .CodeMirror {
+            height: auto;
+            background-color: var(--input-bg);
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            font-size: 0.9em;
+        }
+        .editor-error {
+            box-shadow: 0 0 0 1px var(--error-color);
+        }
+
         button {
             background-color: var(--primary-color);
             color: white;
@@ -119,6 +135,14 @@
             cursor: pointer; font-weight: bold;
             pointer-events: auto;
         }
+
+        #customGradientInputs {
+            display: none;
+            gap: 10px;
+        }
+        #customGradientInputs input {
+            width: calc(50% - 5px);
+        }
     </style>
 </head>
 <body>
@@ -150,6 +174,31 @@ if (index === 0) {
 } else {
     return parentValue - 0.3;
 }</textarea>
+            </div>
+
+            <div class="control-group">
+                <h3>Visualization</h3>
+                <label for="gradientMode">Gradient Scale</label>
+                <select id="gradientMode">
+                    <option value="symmetric" selected>Symmetric ±max</option>
+                    <option value="positive">0 → max</option>
+                    <option value="negative">min → 0</option>
+                    <option value="custom">Custom range</option>
+                </select>
+                <div id="customGradientInputs">
+                    <input type="number" id="gradientMin" placeholder="Min (e.g., -1)" step="0.1" value="-1">
+                    <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
+                </div>
+                <label for="colorLogic">Color Logic Function(value, stats, range)</label>
+                <textarea id="colorLogic">const positiveMax = range.max > 0 ? range.max : 1;
+const negativeMin = range.min < 0 ? range.min : -1;
+const clamp = (num) => Math.min(Math.max(num, 0), 1);
+if (value >= 0) {
+    const ratio = clamp(value / positiveMax);
+    return `hsl(8, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;
+}
+const ratio = clamp(Math.abs(value / negativeMin));
+return `hsl(220, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;</textarea>
             </div>
             
             <div class="control-group">
@@ -186,6 +235,10 @@ if (index === 0) {
         </div>
     </div>
 
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/lib/codemirror.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/mode/javascript/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/selection/active-line.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('gridCanvas');
@@ -205,12 +258,100 @@ document.addEventListener('DOMContentLoaded', () => {
         presetBackwards: document.getElementById('presetBackwards'),
         presetDecay: document.getElementById('presetDecay'),
         inspectorCloseBtn: document.getElementById('inspector-close-btn'),
+        gradientMode: document.getElementById('gradientMode'),
+        gradientMin: document.getElementById('gradientMin'),
+        gradientMax: document.getElementById('gradientMax'),
+        colorLogic: document.getElementById('colorLogic'),
     };
 
+    const customGradientInputs = document.getElementById('customGradientInputs');
+    const codeEditors = {};
+    const defaultColorLogicSource = controls.colorLogic.value;
+    const defaultPropagationSource = controls.propagationLogic.value;
+    const defaultColorFunction = (value, stats, range) => {
+        const positiveMax = range.max > 0 ? range.max : 1;
+        const negativeMin = range.min < 0 ? range.min : -1;
+        const clamp = (num) => Math.min(Math.max(num, 0), 1);
+        if (value >= 0) {
+            const ratio = clamp(value / positiveMax);
+            return `hsl(8, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;
+        }
+        const ratio = clamp(Math.abs(value / negativeMin));
+        return `hsl(220, ${55 + ratio * 35}%, ${70 - ratio * 35}%)`;
+    };
     let config = {};
     let grid = new Map();
     let selectedNodeKey = null;
     let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
+
+    function getCodeValue(id) {
+        if (codeEditors[id]) return codeEditors[id].getValue();
+        const field = document.getElementById(id);
+        return field ? field.value || '' : '';
+    }
+
+    function setCodeValue(id, value) {
+        const nextValue = value ?? '';
+        if (codeEditors[id]) {
+            if (codeEditors[id].getValue() !== nextValue) codeEditors[id].setValue(nextValue);
+            return;
+        }
+        const field = document.getElementById(id);
+        if (field) field.value = nextValue;
+    }
+
+    function setEditorError(id, hasError) {
+        if (codeEditors[id]) {
+            const wrapper = codeEditors[id].getWrapperElement();
+            if (hasError) {
+                wrapper.classList.add('editor-error');
+                wrapper.style.borderColor = 'var(--error-color)';
+            } else {
+                wrapper.classList.remove('editor-error');
+                wrapper.style.borderColor = '';
+            }
+        } else {
+            const field = document.getElementById(id);
+            if (field) field.style.borderColor = hasError ? 'var(--error-color)' : '';
+        }
+    }
+
+    function toggleCustomGradientInputs() {
+        customGradientInputs.style.display = controls.gradientMode.value === 'custom' ? 'flex' : 'none';
+    }
+
+    let runHandle = null;
+    function scheduleRun() {
+        if (runHandle) cancelAnimationFrame(runHandle);
+        runHandle = requestAnimationFrame(() => {
+            runHandle = null;
+            run();
+        });
+    }
+
+    if (window.CodeMirror) {
+        codeEditors.propagationLogic = CodeMirror.fromTextArea(controls.propagationLogic, {
+            mode: 'javascript',
+            theme: 'darcula',
+            lineNumbers: true,
+            lineWrapping: true,
+            autoCloseBrackets: true,
+            styleActiveLine: true,
+        });
+        codeEditors.colorLogic = CodeMirror.fromTextArea(controls.colorLogic, {
+            mode: 'javascript',
+            theme: 'darcula',
+            lineNumbers: true,
+            lineWrapping: true,
+            autoCloseBrackets: true,
+            styleActiveLine: true,
+        });
+        codeEditors.propagationLogic.on('change', scheduleRun);
+        codeEditors.colorLogic.on('change', scheduleRun);
+    } else {
+        controls.propagationLogic.addEventListener('input', scheduleRun);
+        controls.colorLogic.addEventListener('input', scheduleRun);
+    }
 
     function generateGrid() {
         grid.clear();
@@ -263,8 +404,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.translate(canvas.width / 2 + view.offsetX, canvas.height / 2 + view.offsetY);
         ctx.scale(view.scale, view.scale);
 
-        let maxAbsVal = 0;
-        for (const node of grid.values()) maxAbsVal = Math.max(maxAbsVal, Math.abs(node.value));
+        const stats = computeGridStats();
+        const gradientRange = resolveGradientRange(stats);
 
         ctx.strokeStyle = '#555';
         ctx.lineWidth = 0.05;
@@ -283,7 +424,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         for (const [key, node] of grid.entries()) {
             const [x, y] = key.split(',').map(Number);
-            ctx.fillStyle = getDivergentColor(node.value, maxAbsVal);
+            ctx.fillStyle = getNodeColor(node.value, stats, gradientRange);
             ctx.beginPath();
             ctx.arc(x, y, 0.2, 0, 2 * Math.PI);
             ctx.fill();
@@ -296,38 +437,140 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.restore();
     }
 
-    function getDivergentColor(value, maxAbsValue) {
-        if (maxAbsValue === 0) return '#FFFFFF';
-        const ratio = Math.min(Math.abs(value) / maxAbsValue, 1);
-        if (value > 1e-6) return `hsl(0, ${90 * ratio}%, 60%)`; // Red for positive
-        if (value < -1e-6) return `hsl(220, ${90 * ratio}%, 60%)`; // Blue for negative
-        return '#FFFFFF'; // White for zero
+    function computeGridStats() {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const node of grid.values()) {
+            min = Math.min(min, node.value);
+            max = Math.max(max, node.value);
+        }
+        if (!grid.size) {
+            min = 0;
+            max = 0;
+        }
+        return { min, max };
+    }
+
+    function resolveGradientRange(stats) {
+        const safeMin = Number.isFinite(stats.min) ? stats.min : 0;
+        const safeMax = Number.isFinite(stats.max) ? stats.max : 0;
+        switch (config.gradientMode) {
+            case 'positive': {
+                const maxPositive = safeMax > 0 ? safeMax : 1;
+                return { min: 0, max: maxPositive };
+            }
+            case 'negative': {
+                const minNegative = safeMin < 0 ? safeMin : -1;
+                return { min: minNegative, max: 0 };
+            }
+            case 'custom': {
+                if (!config.gradientCustom) return { min: -1, max: 1 };
+                const { min, max } = config.gradientCustom;
+                if (min === max) {
+                    return { min: min - 0.5, max: max + 0.5 };
+                }
+                return config.gradientCustom;
+            }
+            case 'symmetric':
+            default: {
+                const maxAbs = Math.max(Math.abs(safeMin), Math.abs(safeMax), 1);
+                return { min: -maxAbs, max: maxAbs };
+            }
+        }
+    }
+
+    function getNodeColor(value, stats, range) {
+        try {
+            const result = config.colorFn(value, stats, range);
+            if (typeof result === 'string') return result;
+        } catch (error) {
+            console.warn('Color logic error', error);
+        }
+        return defaultColorFunction(value, stats, range);
     }
     
     function updateConfigFromUI() {
-        try {
-            config = {
-                generations: parseInt(controls.generations.value, 10),
-                reunification: controls.reunification.value,
-                moves: JSON.parse(controls.moves.value),
-                propagate: new Function('parentValue', 'index', 'move', `return (() => { ${controls.propagationLogic.value} })();`),
-            };
-            controls.moves.style.borderColor = '';
-            controls.propagationLogic.style.borderColor = '';
-            return true;
-        } catch (e) {
-            if (e.message.includes('JSON')) controls.moves.style.borderColor = 'var(--error-color)';
-            else controls.propagationLogic.style.borderColor = 'var(--error-color)';
+        controls.generations.style.borderColor = '';
+        controls.moves.style.borderColor = '';
+        controls.gradientMin.style.borderColor = '';
+        controls.gradientMax.style.borderColor = '';
+        setEditorError('propagationLogic', false);
+        setEditorError('colorLogic', false);
+
+        const generations = parseInt(controls.generations.value, 10);
+        if (!Number.isFinite(generations) || generations < 1) {
+            controls.generations.style.borderColor = 'var(--error-color)';
             return false;
         }
+
+        let moves;
+        try {
+            moves = JSON.parse(controls.moves.value);
+        } catch (error) {
+            controls.moves.style.borderColor = 'var(--error-color)';
+            return false;
+        }
+
+        const propagationSource = getCodeValue('propagationLogic');
+        let propagate;
+        try {
+            propagate = new Function('parentValue', 'index', 'move', `return (() => { ${propagationSource} })();`);
+            // quick validation to surface syntax errors early
+            propagate(1, 0, [0, 0]);
+        } catch (error) {
+            setEditorError('propagationLogic', true);
+            return false;
+        }
+
+        const gradientMode = controls.gradientMode.value;
+        let gradientCustom = null;
+        if (gradientMode === 'custom') {
+            const minVal = parseFloat(controls.gradientMin.value);
+            const maxVal = parseFloat(controls.gradientMax.value);
+            if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || minVal >= maxVal) {
+                controls.gradientMin.style.borderColor = 'var(--error-color)';
+                controls.gradientMax.style.borderColor = 'var(--error-color)';
+                return false;
+            }
+            gradientCustom = { min: minVal, max: maxVal };
+        }
+
+        const colorLogicSource = getCodeValue('colorLogic');
+        let colorFn;
+        try {
+            colorFn = new Function('value', 'stats', 'range', `return (() => { ${colorLogicSource} })();`);
+            colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 });
+        } catch (error) {
+            setEditorError('colorLogic', true);
+            return false;
+        }
+
+        config = {
+            generations,
+            reunification: controls.reunification.value,
+            moves,
+            propagate,
+            propagationSource,
+            gradientMode,
+            gradientCustom,
+            colorFn,
+            colorLogicSource,
+        };
+        return true;
     }
     
     function updateUIFromConfig() {
         controls.generations.value = config.generations;
         controls.reunification.value = config.reunification;
         controls.moves.value = JSON.stringify(config.moves, null, 2);
-        const funcString = config.propagate.toString();
-        controls.propagationLogic.value = funcString.substring(funcString.indexOf('{') + 1, funcString.lastIndexOf('}')).trim();
+        setCodeValue('propagationLogic', config.propagationSource || defaultPropagationSource);
+        controls.gradientMode.value = config.gradientMode || 'symmetric';
+        if (config.gradientMode === 'custom' && config.gradientCustom) {
+            controls.gradientMin.value = config.gradientCustom.min;
+            controls.gradientMax.value = config.gradientCustom.max;
+        }
+        setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
+        toggleCustomGradientInputs();
     }
 
     function run() {
@@ -365,12 +608,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveProject() {
         const name = controls.projectName.value.trim();
         if (!name) { alert('Please enter a project name.'); return; }
+        if (!updateConfigFromUI()) { alert('Please resolve configuration errors before saving.'); return; }
         const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
         projects[name] = {
             generations: config.generations,
             reunification: config.reunification,
             moves: config.moves,
-            logic: controls.propagationLogic.value,
+            logic: config.propagationSource,
+            gradientMode: config.gradientMode,
+            gradientCustom: config.gradientCustom,
+            colorLogic: config.colorLogicSource,
+            version: 2,
         };
         localStorage.setItem('gridSimProjects', JSON.stringify(projects));
         updateProjectList();
@@ -385,9 +633,16 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.generations.value = proj.generations;
             controls.reunification.value = proj.reunification;
             controls.moves.value = JSON.stringify(proj.moves, null, 2);
-            controls.propagationLogic.value = proj.logic;
+            setCodeValue('propagationLogic', proj.logic || defaultPropagationSource);
+            controls.gradientMode.value = proj.gradientMode || 'symmetric';
+            if (controls.gradientMode.value === 'custom' && proj.gradientCustom) {
+                controls.gradientMin.value = proj.gradientCustom.min;
+                controls.gradientMax.value = proj.gradientCustom.max;
+            }
+            setCodeValue('colorLogic', proj.colorLogic || defaultColorLogicSource);
             controls.projectName.value = name;
-            run();
+            toggleCustomGradientInputs();
+            scheduleRun();
         }
     }
 
@@ -414,21 +669,54 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     const presets = {
-        pascal: { moves: `[[1, -1], [1, 1]]`, logic: `return parentValue;` },
-        divergent: { moves: `[[1, -1], [1, 1]]`, logic: `if (index === 0) return parentValue + 0.2;\nelse return parentValue - 0.3;` },
-        backwards: { moves: `[[1, -1], [1, 1], [-2, 0]]`, logic: `if(index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;` },
-        decay: { moves: `[[1, -1], [1, 1]]`, logic: `return parentValue * 0.8;` },
+        pascal: {
+            moves: `[[1, -1], [1, 1]]`,
+            logic: `return parentValue;`,
+            gradientMode: 'symmetric',
+            colorLogic: defaultColorLogicSource,
+        },
+        divergent: {
+            moves: `[[1, -1], [1, 1]]`,
+            logic: `if (index === 0) return parentValue + 0.2;\nelse return parentValue - 0.3;`,
+            gradientMode: 'symmetric',
+            colorLogic: defaultColorLogicSource,
+        },
+        backwards: {
+            moves: `[[1, -1], [1, 1], [-2, 0]]`,
+            logic: `if(index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;`,
+            gradientMode: 'custom',
+            gradientCustom: { min: -2, max: 2 },
+            colorLogic: defaultColorLogicSource,
+        },
+        decay: {
+            moves: `[[1, -1], [1, 1]]`,
+            logic: `return parentValue * 0.8;`,
+            gradientMode: 'positive',
+            colorLogic: defaultColorLogicSource,
+        },
     };
 
     function loadPreset(preset) {
         controls.moves.value = preset.moves;
-        controls.propagationLogic.value = preset.logic;
-        run();
+        setCodeValue('propagationLogic', preset.logic);
+        controls.gradientMode.value = preset.gradientMode || 'symmetric';
+        if (controls.gradientMode.value === 'custom' && preset.gradientCustom) {
+            controls.gradientMin.value = preset.gradientCustom.min;
+            controls.gradientMax.value = preset.gradientCustom.max;
+        }
+        setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
+        toggleCustomGradientInputs();
+        scheduleRun();
     }
 
     // --- Event Listeners ---
-    ['generations', 'reunification', 'moves', 'propagationLogic'].forEach(id => {
-        document.getElementById(id).addEventListener('input', run);
+    ['generations', 'reunification', 'moves', 'gradientMin', 'gradientMax'].forEach(id => {
+        document.getElementById(id).addEventListener('input', scheduleRun);
+    });
+
+    controls.gradientMode.addEventListener('change', () => {
+        toggleCustomGradientInputs();
+        scheduleRun();
     });
 
     controls.saveProjectBtn.onclick = saveProject;
@@ -468,6 +756,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Initial Load ---
     updateProjectList();
+    toggleCustomGradientInputs();
     run();
 });
 </script>
