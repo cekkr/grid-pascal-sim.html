@@ -632,221 +632,288 @@ return clamp01(result);</textarea>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/edit/closebrackets.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/selection/active-line.min.js"></script>
 <script>
+
 const ENABLE_HOVER_ENUMERATION_POPUP = false; // Set true to enable binary hover popups.
 const ENUMERATION_SAMPLE_LIMIT = 32;
 
-document.addEventListener('DOMContentLoaded', () => {
-    const canvas = document.getElementById('gridCanvas');
-    const ctx = canvas.getContext('2d');
-    const inspectorPanel = document.getElementById('inspector-panel');
-    const inspectorFields = {
-        coords: document.getElementById('inspector-coords'),
-        value: document.getElementById('inspector-value'),
-        gen: document.getElementById('inspector-gen'),
-        parents: document.getElementById('inspector-parents'),
-        children: document.getElementById('inspector-children'),
-        binarySection: document.getElementById('inspector-binary-section'),
-        binaryContent: document.getElementById('inspector-binary-content'),
-    };
-    const controls = {
-        generations: document.getElementById('generations'),
-        reunification: document.getElementById('reunification'),
-        reunificationLogic: document.getElementById('reunificationLogic'),
-        backpropSteps: document.getElementById('backpropSteps'),
-        moves: document.getElementById('moves'),
-        propagationPrimary: document.getElementById('propagationPrimaryLogic'),
-        propagationSecondary: document.getElementById('propagationSecondaryLogic'),
-        effectiveValueLogic: document.getElementById('effectiveValueLogic'),
-        backpropLogic: document.getElementById('backpropLogic'),
-        projectName: document.getElementById('projectName'),
-        saveProjectBtn: document.getElementById('saveProjectBtn'),
-        deleteProjectBtn: document.getElementById('deleteProjectBtn'),
-        loadProjectSelect: document.getElementById('loadProjectSelect'),
-        presetPascal: document.getElementById('presetPascal'),
-        presetDivergent: document.getElementById('presetDivergent'),
-        presetBackwards: document.getElementById('presetBackwards'),
-        presetDecay: document.getElementById('presetDecay'),
-        presetSierpinski: document.getElementById('presetSierpinski'),
-        inspectorCloseBtn: document.getElementById('inspector-close-btn'),
-        gradientMode: document.getElementById('gradientMode'),
-        gradientMin: document.getElementById('gradientMin'),
-        gradientMax: document.getElementById('gradientMax'),
-        colorLogic: document.getElementById('colorLogic'),
-        hdrLogic: document.getElementById('hdrLogic'),
-    };
-    const controlsPanel = document.getElementById('controls');
-    const editorPanel = document.getElementById('codeEditorPanel');
-    const editorContent = document.getElementById('codeEditorContent');
-    const editorToggleBtn = document.getElementById('editorToggleBtn');
-    const editorResizer = document.getElementById('editorResizer');
-    const sidebarResizer = document.getElementById('sidebarResizer');
-    const editorSections = Array.from(document.querySelectorAll('.editor-section[data-editor-group]'));
-
-    const STORAGE_KEYS = {
-        editorHeight: 'gridSimEditorHeight',
-        sidebarWidth: 'gridSimSidebarWidth',
-        editorCollapsed: 'gridSimEditorCollapsed',
-    };
-    const MIN_EDITOR_HEIGHT = 160;
-    const MAX_EDITOR_HEIGHT = 640;
-    const MIN_SIDEBAR_WIDTH = 260;
-    const MAX_SIDEBAR_WIDTH = 720;
-
-    const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max);
-
-    let editorHeight = 240;
-    let isEditorCollapsed = false;
-    let binaryEnumerationSupported = false;
-    let binaryHoverPopup = null;
-    let currentHoverNodeKey = null;
-
-    const editorGroups = new Map();
-
-    if (editorContent) {
-        const storedHeight = parseInt(localStorage.getItem(STORAGE_KEYS.editorHeight), 10);
-        if (Number.isFinite(storedHeight)) {
-            editorHeight = clampNumber(storedHeight, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
-        } else {
-            editorHeight = clampNumber(editorContent.offsetHeight || editorHeight, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
-        }
-        editorContent.style.height = `${editorHeight}px`;
+class Debouncer {
+    constructor(delay, callback) {
+        this.delay = delay;
+        this.callback = callback;
+        this.handle = null;
     }
 
-    if (editorPanel) {
-        isEditorCollapsed = localStorage.getItem(STORAGE_KEYS.editorCollapsed) === 'true';
-        if (isEditorCollapsed) {
-            editorPanel.classList.add('collapsed');
-            if (editorToggleBtn) {
-                editorToggleBtn.textContent = 'Show Editors';
-                editorToggleBtn.setAttribute('aria-expanded', 'false');
+    trigger(...args) {
+        if (this.handle) {
+            clearTimeout(this.handle);
+        }
+        this.handle = setTimeout(() => {
+            this.handle = null;
+            this.callback(...args);
+        }, this.delay);
+    }
+
+    cancel() {
+        if (this.handle) {
+            clearTimeout(this.handle);
+            this.handle = null;
+        }
+    }
+}
+
+class GridSimulatorApp {
+    constructor(document) {
+
+        const app = this;
+        const canvas = document.getElementById('gridCanvas');
+        const ctx = canvas.getContext('2d');
+        const inspectorPanel = document.getElementById('inspector-panel');
+        const inspectorFields = {
+            coords: document.getElementById('inspector-coords'),
+            value: document.getElementById('inspector-value'),
+            gen: document.getElementById('inspector-gen'),
+            parents: document.getElementById('inspector-parents'),
+            children: document.getElementById('inspector-children'),
+            binarySection: document.getElementById('inspector-binary-section'),
+            binaryContent: document.getElementById('inspector-binary-content'),
+        };
+        this.document = document;
+        this.canvas = canvas;
+        this.ctx = ctx;
+        this.inspectorPanel = inspectorPanel;
+        this.inspectorFields = inspectorFields;
+        const controls = {
+            generations: document.getElementById('generations'),
+            reunification: document.getElementById('reunification'),
+            reunificationLogic: document.getElementById('reunificationLogic'),
+            backpropSteps: document.getElementById('backpropSteps'),
+            moves: document.getElementById('moves'),
+            propagationPrimary: document.getElementById('propagationPrimaryLogic'),
+            propagationSecondary: document.getElementById('propagationSecondaryLogic'),
+            effectiveValueLogic: document.getElementById('effectiveValueLogic'),
+            backpropLogic: document.getElementById('backpropLogic'),
+            projectName: document.getElementById('projectName'),
+            saveProjectBtn: document.getElementById('saveProjectBtn'),
+            deleteProjectBtn: document.getElementById('deleteProjectBtn'),
+            loadProjectSelect: document.getElementById('loadProjectSelect'),
+            presetPascal: document.getElementById('presetPascal'),
+            presetDivergent: document.getElementById('presetDivergent'),
+            presetBackwards: document.getElementById('presetBackwards'),
+            presetDecay: document.getElementById('presetDecay'),
+            presetSierpinski: document.getElementById('presetSierpinski'),
+            inspectorCloseBtn: document.getElementById('inspector-close-btn'),
+            gradientMode: document.getElementById('gradientMode'),
+            gradientMin: document.getElementById('gradientMin'),
+            gradientMax: document.getElementById('gradientMax'),
+            colorLogic: document.getElementById('colorLogic'),
+            hdrLogic: document.getElementById('hdrLogic'),
+        };
+        this.controls = controls;
+        const controlsPanel = document.getElementById('controls');
+        const editorPanel = document.getElementById('codeEditorPanel');
+        const editorContent = document.getElementById('codeEditorContent');
+        const editorToggleBtn = document.getElementById('editorToggleBtn');
+        const editorResizer = document.getElementById('editorResizer');
+        const sidebarResizer = document.getElementById('sidebarResizer');
+        const editorSections = Array.from(document.querySelectorAll('.editor-section[data-editor-group]'));
+        this.controlsPanel = controlsPanel;
+        this.editorPanel = editorPanel;
+        this.editorContent = editorContent;
+        this.editorToggleBtn = editorToggleBtn;
+        this.editorResizer = editorResizer;
+        this.sidebarResizer = sidebarResizer;
+        this.editorSections = editorSections;
+
+        const STORAGE_KEYS = {
+            editorHeight: 'gridSimEditorHeight',
+            sidebarWidth: 'gridSimSidebarWidth',
+            editorCollapsed: 'gridSimEditorCollapsed',
+        };
+        this.STORAGE_KEYS = STORAGE_KEYS;
+        const MIN_EDITOR_HEIGHT = 160;
+        const MAX_EDITOR_HEIGHT = 640;
+        const MIN_SIDEBAR_WIDTH = 260;
+        const MAX_SIDEBAR_WIDTH = 720;
+        this.MIN_EDITOR_HEIGHT = MIN_EDITOR_HEIGHT;
+        this.MAX_EDITOR_HEIGHT = MAX_EDITOR_HEIGHT;
+        this.MIN_SIDEBAR_WIDTH = MIN_SIDEBAR_WIDTH;
+        this.MAX_SIDEBAR_WIDTH = MAX_SIDEBAR_WIDTH;
+
+        const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max);
+
+        let editorHeight = 240;
+        let isEditorCollapsed = false;
+        let binaryEnumerationSupported = false;
+        let binaryHoverPopup = null;
+        let currentHoverNodeKey = null;
+        this.editorHeight = editorHeight;
+        this.isEditorCollapsed = isEditorCollapsed;
+        this.binaryEnumerationSupported = binaryEnumerationSupported;
+        this.binaryHoverPopup = binaryHoverPopup;
+        this.currentHoverNodeKey = currentHoverNodeKey;
+
+        const editorGroups = new Map();
+        this.editorGroups = editorGroups;
+
+        if (editorContent) {
+            const storedHeight = parseInt(localStorage.getItem(STORAGE_KEYS.editorHeight), 10);
+            if (Number.isFinite(storedHeight)) {
+                editorHeight = clampNumber(storedHeight, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
+            } else {
+                editorHeight = clampNumber(editorContent.offsetHeight || editorHeight, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
             }
-        } else if (editorToggleBtn) {
-            editorToggleBtn.setAttribute('aria-expanded', 'true');
+            app.editorHeight = editorHeight;
+            editorContent.style.height = `${editorHeight}px`;
         }
-    }
 
-    if (controlsPanel) {
-        const storedWidth = parseInt(localStorage.getItem(STORAGE_KEYS.sidebarWidth), 10);
-        if (Number.isFinite(storedWidth)) {
-            controlsPanel.style.width = `${clampNumber(storedWidth, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)}px`;
+        if (editorPanel) {
+            isEditorCollapsed = localStorage.getItem(STORAGE_KEYS.editorCollapsed) === 'true';
+            app.isEditorCollapsed = isEditorCollapsed;
+            if (isEditorCollapsed) {
+                editorPanel.classList.add('collapsed');
+                if (editorToggleBtn) {
+                    editorToggleBtn.textContent = 'Show Editors';
+                    editorToggleBtn.setAttribute('aria-expanded', 'false');
+                }
+            } else if (editorToggleBtn) {
+                editorToggleBtn.setAttribute('aria-expanded', 'true');
+            }
         }
-    }
 
-    const customGradientInputs = document.getElementById('customGradientInputs');
-    const reunificationEditorSection = document.getElementById('reunificationEditorSection');
-    const codeEditors = {};
-    const defaultColorLogicSource = controls.colorLogic.value;
-    const defaultHdrLogicSource = controls.hdrLogic.value;
-    const defaultPropagationSources = {
-        primary: controls.propagationPrimary ? controls.propagationPrimary.value : '',
-        secondary: controls.propagationSecondary ? controls.propagationSecondary.value : '',
-    };
-    const defaultReunificationLogicSource = controls.reunificationLogic ? controls.reunificationLogic.value : '';
-    const defaultEffectiveValueSource = controls.effectiveValueLogic ? controls.effectiveValueLogic.value : '';
-    const defaultBackpropLogicSource = controls.backpropLogic ? controls.backpropLogic.value : '';
-
-    function refreshEditorAfterLayout(editorId) {
-        const instance = codeEditors[editorId];
-        if (!instance) return;
-        requestAnimationFrame(() => instance.refresh());
-    }
-
-    function refreshActiveEditors() {
-        if (isEditorCollapsed) return;
-        editorGroups.forEach(group => {
-            if (group.activeId) refreshEditorAfterLayout(group.activeId);
-        });
-    }
-
-    function ensureEditorExpanded() {
-        if (!editorPanel || !editorPanel.classList.contains('collapsed')) return;
-        editorPanel.classList.remove('collapsed');
-        isEditorCollapsed = false;
-        if (editorToggleBtn) {
-            editorToggleBtn.textContent = 'Hide Editors';
-            editorToggleBtn.setAttribute('aria-expanded', 'true');
+        if (controlsPanel) {
+            const storedWidth = parseInt(localStorage.getItem(STORAGE_KEYS.sidebarWidth), 10);
+            if (Number.isFinite(storedWidth)) {
+                controlsPanel.style.width = `${clampNumber(storedWidth, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)}px`;
+            }
         }
-        localStorage.setItem(STORAGE_KEYS.editorCollapsed, 'false');
-        if (editorContent) editorContent.style.height = `${editorHeight}px`;
-        refreshActiveEditors();
-    }
 
-    function setActiveEditor(groupName, editorId, options = {}) {
-        const group = editorGroups.get(groupName);
-        if (!group) return;
-        if (!editorId) editorId = group.activeId;
-        group.activeId = editorId;
-        group.tabs.forEach(tab => {
-            const isActive = tab.dataset.targetEditor === editorId;
-            tab.classList.toggle('active', isActive);
-            tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-        });
-        group.panes.forEach(pane => {
-            const isActive = pane.dataset.editorPane === editorId;
-            pane.classList.toggle('active', isActive);
-        });
-        if (!options.skipRefresh) refreshActiveEditors();
-    }
+        const customGradientInputs = document.getElementById('customGradientInputs');
+        const reunificationEditorSection = document.getElementById('reunificationEditorSection');
+        const codeEditors = {};
+        this.customGradientInputs = customGradientInputs;
+        this.reunificationEditorSection = reunificationEditorSection;
+        this.codeEditors = codeEditors;
+        const defaultColorLogicSource = controls.colorLogic.value;
+        const defaultHdrLogicSource = controls.hdrLogic.value;
+        const defaultPropagationSources = {
+            primary: controls.propagationPrimary ? controls.propagationPrimary.value : '',
+            secondary: controls.propagationSecondary ? controls.propagationSecondary.value : '',
+        };
+        const defaultReunificationLogicSource = controls.reunificationLogic ? controls.reunificationLogic.value : '';
+        const defaultEffectiveValueSource = controls.effectiveValueLogic ? controls.effectiveValueLogic.value : '';
+        const defaultBackpropLogicSource = controls.backpropLogic ? controls.backpropLogic.value : '';
+        this.defaultColorLogicSource = defaultColorLogicSource;
+        this.defaultHdrLogicSource = defaultHdrLogicSource;
+        this.defaultPropagationSources = defaultPropagationSources;
+        this.defaultReunificationLogicSource = defaultReunificationLogicSource;
+        this.defaultEffectiveValueSource = defaultEffectiveValueSource;
+        this.defaultBackpropLogicSource = defaultBackpropLogicSource;
 
-    function initializeEditorGroups() {
-        editorSections.forEach(section => {
-            const groupName = section.dataset.editorGroup;
-            if (!groupName) return;
-            const tabs = Array.from(section.querySelectorAll('.editor-tab'));
-            const panes = Array.from(section.querySelectorAll('.editor-pane'));
-            const defaultActiveId =
-                tabs.find(tab => tab.classList.contains('active'))?.dataset.targetEditor
-                || panes[0]?.dataset.editorPane;
-            const group = { section, tabs, panes, activeId: defaultActiveId };
-            editorGroups.set(groupName, group);
-            if (defaultActiveId) setActiveEditor(groupName, defaultActiveId, { skipRefresh: true });
-            tabs.forEach(tab => {
-                tab.addEventListener('click', () => {
-                    const targetId = tab.dataset.targetEditor;
-                    if (!targetId) return;
-                    ensureEditorExpanded();
-                    setActiveEditor(groupName, targetId);
+        function refreshEditorAfterLayout(editorId) {
+            const instance = codeEditors[editorId];
+            if (!instance) return;
+            requestAnimationFrame(() => instance.refresh());
+        }
+
+        function refreshActiveEditors() {
+            if (isEditorCollapsed) return;
+            editorGroups.forEach(group => {
+                if (group.activeId) refreshEditorAfterLayout(group.activeId);
+            });
+        }
+
+        function ensureEditorExpanded() {
+            if (!editorPanel || !editorPanel.classList.contains('collapsed')) return;
+            editorPanel.classList.remove('collapsed');
+            isEditorCollapsed = false;
+            app.isEditorCollapsed = isEditorCollapsed;
+            if (editorToggleBtn) {
+                editorToggleBtn.textContent = 'Hide Editors';
+                editorToggleBtn.setAttribute('aria-expanded', 'true');
+            }
+            localStorage.setItem(STORAGE_KEYS.editorCollapsed, 'false');
+            if (editorContent) editorContent.style.height = `${editorHeight}px`;
+            refreshActiveEditors();
+        }
+
+        function setActiveEditor(groupName, editorId, options = {}) {
+            const group = editorGroups.get(groupName);
+            if (!group) return;
+            if (!editorId) editorId = group.activeId;
+            group.activeId = editorId;
+            group.tabs.forEach(tab => {
+                const isActive = tab.dataset.targetEditor === editorId;
+                tab.classList.toggle('active', isActive);
+                tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            });
+            group.panes.forEach(pane => {
+                const isActive = pane.dataset.editorPane === editorId;
+                pane.classList.toggle('active', isActive);
+            });
+            if (!options.skipRefresh) refreshActiveEditors();
+        }
+
+        function initializeEditorGroups() {
+            editorSections.forEach(section => {
+                const groupName = section.dataset.editorGroup;
+                if (!groupName) return;
+                const tabs = Array.from(section.querySelectorAll('.editor-tab'));
+                const panes = Array.from(section.querySelectorAll('.editor-pane'));
+                const defaultActiveId =
+                    tabs.find(tab => tab.classList.contains('active'))?.dataset.targetEditor
+                    || panes[0]?.dataset.editorPane;
+                const group = { section, tabs, panes, activeId: defaultActiveId };
+                editorGroups.set(groupName, group);
+                if (defaultActiveId) setActiveEditor(groupName, defaultActiveId, { skipRefresh: true });
+                tabs.forEach(tab => {
+                    tab.addEventListener('click', () => {
+                        const targetId = tab.dataset.targetEditor;
+                        if (!targetId) return;
+                        ensureEditorExpanded();
+                        setActiveEditor(groupName, targetId);
+                    });
                 });
             });
-        });
-    }
+        }
 
-    if (editorToggleBtn && editorPanel) {
-        editorToggleBtn.addEventListener('click', () => {
+        if (editorToggleBtn && editorPanel) {
+            editorToggleBtn.addEventListener('click', () => {
             const willCollapse = !editorPanel.classList.contains('collapsed');
             editorPanel.classList.toggle('collapsed', willCollapse);
             isEditorCollapsed = willCollapse;
+            app.isEditorCollapsed = isEditorCollapsed;
             if (willCollapse) {
                 editorToggleBtn.textContent = 'Show Editors';
                 editorToggleBtn.setAttribute('aria-expanded', 'false');
             } else {
-                editorToggleBtn.textContent = 'Hide Editors';
-                editorToggleBtn.setAttribute('aria-expanded', 'true');
-                if (editorContent) editorContent.style.height = `${editorHeight}px`;
-                refreshActiveEditors();
-            }
-            localStorage.setItem(STORAGE_KEYS.editorCollapsed, willCollapse ? 'true' : 'false');
-        });
-    }
+                    editorToggleBtn.textContent = 'Hide Editors';
+                    editorToggleBtn.setAttribute('aria-expanded', 'true');
+                    if (editorContent) editorContent.style.height = `${editorHeight}px`;
+                    refreshActiveEditors();
+                }
+                localStorage.setItem(STORAGE_KEYS.editorCollapsed, willCollapse ? 'true' : 'false');
+            });
+        }
 
-    if (editorResizer && editorContent) {
-        let resizingEditors = false;
-        let startY = 0;
-        let startHeight = editorHeight;
+        if (editorResizer && editorContent) {
+            let resizingEditors = false;
+            let startY = 0;
+            let startHeight = editorHeight;
 
-        editorResizer.addEventListener('mousedown', event => {
-            if (isEditorCollapsed) return;
-            event.preventDefault();
-            resizingEditors = true;
-            startY = event.clientY;
-            startHeight = editorContent.offsetHeight || editorHeight;
-            document.body.classList.add('resizing-vertical');
-        });
+            editorResizer.addEventListener('mousedown', event => {
+                if (isEditorCollapsed) return;
+                event.preventDefault();
+                resizingEditors = true;
+                startY = event.clientY;
+                startHeight = editorContent.offsetHeight || editorHeight;
+                document.body.classList.add('resizing-vertical');
+            });
 
-        window.addEventListener('mousemove', event => {
-            if (!resizingEditors) return;
+            window.addEventListener('mousemove', event => {
+                if (!resizingEditors) return;
             const delta = event.clientY - startY;
             editorHeight = clampNumber(startHeight + delta, MIN_EDITOR_HEIGHT, MAX_EDITOR_HEIGHT);
+            app.editorHeight = editorHeight;
             editorContent.style.height = `${editorHeight}px`;
             refreshActiveEditors();
         });
@@ -856,1822 +923,1868 @@ document.addEventListener('DOMContentLoaded', () => {
             resizingEditors = false;
             document.body.classList.remove('resizing-vertical');
             localStorage.setItem(STORAGE_KEYS.editorHeight, Math.round(editorHeight));
+            app.editorHeight = editorHeight;
             refreshActiveEditors();
         });
-    }
-
-    if (sidebarResizer && controlsPanel) {
-        let resizingSidebar = false;
-        let startX = 0;
-        let startWidth = controlsPanel.offsetWidth;
-
-        sidebarResizer.addEventListener('mousedown', event => {
-            event.preventDefault();
-            resizingSidebar = true;
-            startX = event.clientX;
-            startWidth = controlsPanel.offsetWidth;
-            document.body.classList.add('resizing-horizontal');
-        });
-
-        window.addEventListener('mousemove', event => {
-            if (!resizingSidebar) return;
-            const delta = event.clientX - startX;
-            const nextWidth = clampNumber(startWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
-            controlsPanel.style.width = `${nextWidth}px`;
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (!resizingSidebar) return;
-            resizingSidebar = false;
-            document.body.classList.remove('resizing-horizontal');
-            const storedWidth = clampNumber(Math.round(controlsPanel.offsetWidth), MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
-            localStorage.setItem(STORAGE_KEYS.sidebarWidth, storedWidth);
-            drawGrid();
-        });
-    }
-
-    initializeEditorGroups();
-    refreshActiveEditors();
-
-    const positiveColorStops = [
-        { stop: 0, rgb: [255, 250, 165] },
-        { stop: 0.33, rgb: [253, 197, 110] },
-        { stop: 0.66, rgb: [244, 109, 67] },
-        { stop: 1, rgb: [180, 23, 44] },
-    ];
-    const negativeColorStops = [
-        { stop: 0, rgb: [194, 230, 255] },
-        { stop: 0.33, rgb: [123, 190, 222] },
-        { stop: 0.66, rgb: [50, 136, 189] },
-        { stop: 1, rgb: [3, 52, 118] },
-    ];
-
-    const createStatsTracker = () => ({ min: Infinity, max: -Infinity, count: 0 });
-    const resetStatsTracker = (tracker) => {
-        tracker.min = Infinity;
-        tracker.max = -Infinity;
-        tracker.count = 0;
-        return tracker;
-    };
-    const trackStatsValue = (tracker, value) => {
-        if (!tracker || !Number.isFinite(value)) return;
-        tracker.min = Math.min(tracker.min, value);
-        tracker.max = Math.max(tracker.max, value);
-        tracker.count += 1;
-    };
-
-    const clamp01 = (value) => Math.min(Math.max(value, 0), 1);
-    const sampleColorStops = (stops, ratio) => {
-        if (!stops.length) return [255, 255, 255];
-        const clamped = clamp01(ratio);
-        if (clamped <= stops[0].stop) return stops[0].rgb.slice();
-        for (let i = 0; i < stops.length - 1; i++) {
-            const left = stops[i];
-            const right = stops[i + 1];
-            if (clamped >= left.stop && clamped <= right.stop) {
-                const span = right.stop - left.stop || 1;
-                const t = (clamped - left.stop) / span;
-                return left.rgb.map((channel, idx) =>
-                    Math.round(channel + (right.rgb[idx] - channel) * t)
-                );
-            }
-        }
-        return stops[stops.length - 1].rgb.slice();
-    };
-    const accentuateRatio = (ratio, intensity) => {
-        const safeIntensity = Math.max(intensity, 1);
-        return clamp01(Math.pow(clamp01(ratio), 1 / safeIntensity));
-    };
-    const rgbArrayToCss = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-
-    const clampRatio = (value) => Math.min(Math.max(value, 0), 1);
-
-    const defaultHdrFunction = (input, context = {}) => {
-        if (!input) return 0;
-        const scale = (context && typeof context.scale === 'number' && Number.isFinite(context.scale))
-            ? context.scale
-            : 1;
-        const base = clamp01(input.ratio ?? 0);
-        const shoulder = Math.log1p(base * 8) / Math.log1p(8);
-        const gamma = Math.pow(base, 0.75);
-        const mix = 0.35;
-        let result = (1 - mix) * shoulder + mix * gamma;
-        if (scale < 1) {
-            result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
-        }
-        return clampRatio(result);
-    };
-
-    const defaultColorFunction = (value, stats, range, context = {}) => {
-        const safeMax = range.max > 0 ? range.max : 1;
-        const safeMin = range.min < 0 ? range.min : -1;
-        const scale = (context && typeof context.scale === 'number' && Number.isFinite(context.scale))
-            ? context.scale
-            : 1;
-        const intensity = scale < 1
-            ? Math.min(1.6, Math.pow(1 / Math.max(scale, 0.0001), 0.3))
-            : 1;
-
-        const applyHDR = (context && typeof context.applyHDR === 'function')
-            ? context.applyHDR
-            : (input) => defaultHdrFunction(input, { scale });
-
-        if (value >= 0) {
-            const hdrRatio = clampRatio(applyHDR({ ratio: value / safeMax, value, stats, range, polarity: 'positive', scale }));
-            const ratio = accentuateRatio(hdrRatio, intensity);
-            return rgbArrayToCss(sampleColorStops(positiveColorStops, ratio));
-        }
-        const hdrRatio = clampRatio(applyHDR({ ratio: Math.abs(value / safeMin), value, stats, range, polarity: 'negative', scale }));
-        const ratio = accentuateRatio(hdrRatio, intensity);
-        return rgbArrayToCss(sampleColorStops(negativeColorStops, ratio));
-    };
-    let config = {};
-    let grid = new Map();
-    let selectedNodeKey = null;
-    let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
-
-    const MIN_PIXEL_NODE_RADIUS = 3;
-    const MIN_PIXEL_EDGE_WIDTH = 0.6;
-    const MIN_PIXEL_SELECTION_WIDTH = 1.8;
-    const EDGE_RENDER_SCALE_THRESHOLD = 0.9;
-    const AGGREGATION_SCALE_THRESHOLD = 6;
-    const AGGREGATION_BUCKET_PIXELS = 8;
-    const VIEW_CULL_PADDING = 1.5;
-
-    function getNodeRadius() {
-        return Math.max(0.2, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
-    }
-
-    function getEdgeWidth() {
-        return Math.max(0.02, MIN_PIXEL_EDGE_WIDTH / Math.max(view.scale, 0.0001));
-    }
-
-    function getSelectionWidth() {
-        return Math.max(0.12, MIN_PIXEL_SELECTION_WIDTH / Math.max(view.scale, 0.0001));
-    }
-
-    function getCodeValue(id) {
-        if (codeEditors[id]) return codeEditors[id].getValue();
-        const field = document.getElementById(id);
-        return field ? field.value || '' : '';
-    }
-
-    function setCodeValue(id, value) {
-        const nextValue = value ?? '';
-        if (codeEditors[id]) {
-            if (codeEditors[id].getValue() !== nextValue) codeEditors[id].setValue(nextValue);
-            return;
-        }
-        const field = document.getElementById(id);
-        if (field) field.value = nextValue;
-    }
-
-    function setEditorError(id, hasError) {
-        if (codeEditors[id]) {
-            const wrapper = codeEditors[id].getWrapperElement();
-            if (hasError) {
-                wrapper.classList.add('editor-error');
-                wrapper.style.borderColor = 'var(--error-color)';
-            } else {
-                wrapper.classList.remove('editor-error');
-                wrapper.style.borderColor = '';
-            }
-        } else {
-            const field = document.getElementById(id);
-            if (field) field.style.borderColor = hasError ? 'var(--error-color)' : '';
-        }
-    }
-
-    function toggleCustomGradientInputs() {
-        customGradientInputs.style.display = controls.gradientMode.value === 'custom' ? 'flex' : 'none';
-    }
-
-    function toggleReunificationEditor() {
-        if (!reunificationEditorSection) return;
-        const isPersonalized = controls.reunification.value === 'personalized';
-        reunificationEditorSection.style.display = isPersonalized ? '' : 'none';
-        if (isPersonalized) {
-            ensureEditorExpanded();
-            if (editorGroups.has('reunification')) {
-                setActiveEditor('reunification', 'reunificationLogic');
-                refreshActiveEditors();
-            }
-        }
-    }
-
-    function createRootPathMeta() {
-        return {
-            depth: 0,
-            total: 1,
-            onesHistogram: { 0: 1 },
-            samples: [''],
-            sampleComplete: true,
-        };
-    }
-
-    function clonePathMeta(meta) {
-        if (!meta) return null;
-        return {
-            depth: meta.depth,
-            total: meta.total,
-            onesHistogram: Object.fromEntries(Object.entries(meta.onesHistogram || {}).map(([key, value]) => [Number(key), value])),
-            samples: Array.isArray(meta.samples) ? meta.samples.slice() : [],
-            sampleComplete: Boolean(meta.sampleComplete),
-        };
-    }
-
-    function advancePathMeta(parentMeta, branchIndex) {
-        if (!parentMeta || typeof parentMeta !== 'object') return null;
-        const nextDepth = parentMeta.depth + 1;
-        const onesIncrement = branchIndex === 1 ? 1 : 0;
-        const onesHistogram = {};
-        Object.entries(parentMeta.onesHistogram || {}).forEach(([key, count]) => {
-            const ones = Number(key);
-            const nextOnes = ones + onesIncrement;
-            onesHistogram[nextOnes] = (onesHistogram[nextOnes] || 0) + count;
-        });
-        let samples = [];
-        let sampleComplete = parentMeta.sampleComplete;
-        if (Array.isArray(parentMeta.samples) && parentMeta.samples.length) {
-            samples = parentMeta.samples.map(sample => `${sample}${branchIndex === 1 ? '1' : '0'}`);
-            if (samples.length > ENUMERATION_SAMPLE_LIMIT) {
-                samples = samples.slice(0, ENUMERATION_SAMPLE_LIMIT);
-                sampleComplete = false;
-            }
-        }
-        return {
-            depth: nextDepth,
-            total: parentMeta.total,
-            onesHistogram,
-            samples,
-            sampleComplete,
-        };
-    }
-
-    function mergeUniqueSamples(a = [], b = []) {
-        const merged = [...a, ...b];
-        const seen = new Set();
-        const result = [];
-        merged.forEach(sample => {
-            if (typeof sample !== 'string') return;
-            if (seen.has(sample)) return;
-            seen.add(sample);
-            result.push(sample);
-        });
-        return result.sort();
-    }
-
-    function mergePathMetas(baseMeta, additionMeta) {
-        if (!additionMeta) return baseMeta ? clonePathMeta(baseMeta) : null;
-        if (!baseMeta) return clonePathMeta(additionMeta);
-        const merged = {
-            depth: Math.max(baseMeta.depth, additionMeta.depth),
-            total: baseMeta.total + additionMeta.total,
-            onesHistogram: {},
-            samples: [],
-            sampleComplete: false,
-        };
-        const baseHistogram = baseMeta.onesHistogram || {};
-        const additionHistogram = additionMeta.onesHistogram || {};
-        Object.entries(baseHistogram).forEach(([key, count]) => {
-            const numericKey = Number(key);
-            merged.onesHistogram[numericKey] = (merged.onesHistogram[numericKey] || 0) + count;
-        });
-        Object.entries(additionHistogram).forEach(([key, count]) => {
-            const numericKey = Number(key);
-            merged.onesHistogram[numericKey] = (merged.onesHistogram[numericKey] || 0) + count;
-        });
-        const combinedSamples = mergeUniqueSamples(baseMeta.samples || [], additionMeta.samples || []);
-        if (combinedSamples.length <= ENUMERATION_SAMPLE_LIMIT && baseMeta.sampleComplete && additionMeta.sampleComplete && merged.total <= ENUMERATION_SAMPLE_LIMIT) {
-            merged.samples = combinedSamples;
-            merged.sampleComplete = combinedSamples.length === merged.total;
-        } else {
-            merged.samples = combinedSamples.slice(0, ENUMERATION_SAMPLE_LIMIT);
-            merged.sampleComplete = false;
-        }
-        return merged;
-    }
-
-    function prepareBinaryInfo(nodeKey) {
-        if (!binaryEnumerationSupported) {
-            return { supported: false, reason: 'Binary enumeration is available only when two moves are defined.' };
-        }
-        if (!nodeKey || !grid.has(nodeKey)) {
-            return { supported: false, reason: 'Node unavailable for binary analysis.' };
-        }
-        const node = grid.get(nodeKey);
-        if (!node || !node.pathMeta) {
-            return { supported: false, reason: 'Binary path metadata not generated for this node.' };
-        }
-        const meta = node.pathMeta;
-        const histogramEntries = Object.entries(meta.onesHistogram || {}).map(([onesKey, count]) => {
-            const ones = Number(onesKey);
-            const zeros = Math.max(0, meta.depth - ones);
-            return { ones, zeros, count };
-        }).sort((a, b) => a.ones - b.ones);
-        const minOnes = histogramEntries.length ? histogramEntries[0].ones : 0;
-        const maxOnes = histogramEntries.length ? histogramEntries[histogramEntries.length - 1].ones : 0;
-        const minZeros = histogramEntries.length ? Math.max(0, meta.depth - maxOnes) : meta.depth;
-        const maxZeros = histogramEntries.length ? Math.max(0, meta.depth - minOnes) : meta.depth;
-        return {
-            supported: true,
-            nodeKey,
-            meta,
-            depth: meta.depth,
-            totalPaths: meta.total,
-            histogramEntries,
-            minOnes,
-            maxOnes,
-            minZeros,
-            maxZeros,
-            samples: Array.isArray(meta.samples) ? meta.samples : [],
-            sampleComplete: Boolean(meta.sampleComplete),
-        };
-    }
-
-    function updateInspectorBinarySection(nodeKey) {
-        if (!inspectorFields.binarySection || !inspectorFields.binaryContent) return;
-        if (!nodeKey) {
-            inspectorFields.binarySection.classList.add('hidden');
-            inspectorFields.binaryContent.textContent = '';
-            return;
-        }
-        const info = prepareBinaryInfo(nodeKey);
-        const fragment = document.createDocumentFragment();
-        if (!info.supported) {
-            inspectorFields.binarySection.classList.remove('hidden');
-            const note = document.createElement('div');
-            note.className = 'binary-note';
-            note.textContent = info.reason;
-            fragment.appendChild(note);
-            inspectorFields.binaryContent.innerHTML = '';
-            inspectorFields.binaryContent.appendChild(fragment);
-            return;
-        }
-        inspectorFields.binarySection.classList.remove('hidden');
-        const stats = document.createElement('div');
-        stats.className = 'binary-stat';
-        stats.innerHTML = `<strong>Total paths:</strong> ${info.totalPaths.toLocaleString()}`;
-        fragment.appendChild(stats);
-
-        const depthStat = document.createElement('div');
-        depthStat.className = 'binary-stat';
-        depthStat.innerHTML = `<strong>Depth:</strong> ${info.depth}`;
-        fragment.appendChild(depthStat);
-
-        const ratioStat = document.createElement('div');
-        ratioStat.className = 'binary-stat';
-        const zerosRange = info.minZeros === info.maxZeros
-            ? `${info.minZeros}`
-            : `${info.minZeros} – ${info.maxZeros}`;
-        const onesRange = info.minOnes === info.maxOnes
-            ? `${info.minOnes}`
-            : `${info.minOnes} – ${info.maxOnes}`;
-        ratioStat.innerHTML = `<strong>0s:</strong> ${zerosRange} &nbsp;•&nbsp; <strong>1s:</strong> ${onesRange}`;
-        fragment.appendChild(ratioStat);
-
-        if (info.histogramEntries.length) {
-            const distribution = document.createElement('div');
-            distribution.className = 'binary-distribution';
-            distribution.innerHTML = info.histogramEntries.map(entry => {
-                return `C(${info.depth}, ${entry.ones}) = <strong>${entry.count.toLocaleString()}</strong> (1s=${entry.ones}, 0s=${entry.zeros})`;
-            }).join('<br>');
-            fragment.appendChild(distribution);
         }
 
-        const binaryFlex = document.createElement('div');
-        binaryFlex.className = 'binary-flex';        
+        if (sidebarResizer && controlsPanel) {
+            let resizingSidebar = false;
+            let startX = 0;
+            let startWidth = controlsPanel.offsetWidth;
 
-        if (info.samples.length) {
-            const sampleLabel = document.createElement('div');
-            sampleLabel.className = 'binary-stat';
-            sampleLabel.innerHTML = '<strong>Enumerations:</strong>';
-            binaryFlex.appendChild(sampleLabel);
-            const sampleContainer = document.createElement('div');
-            sampleContainer.className = 'binary-sample';
-            info.samples.forEach(sample => {
-                const code = document.createElement('code');
-                code.textContent = sample || '∅';
-                sampleContainer.appendChild(code);
+            sidebarResizer.addEventListener('mousedown', event => {
+                event.preventDefault();
+                resizingSidebar = true;
+                startX = event.clientX;
+                startWidth = controlsPanel.offsetWidth;
+                document.body.classList.add('resizing-horizontal');
             });
-            binaryFlex.appendChild(sampleContainer);
-            if (!info.sampleComplete) {
+
+            window.addEventListener('mousemove', event => {
+                if (!resizingSidebar) return;
+                const delta = event.clientX - startX;
+                const nextWidth = clampNumber(startWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+                controlsPanel.style.width = `${nextWidth}px`;
+            });
+
+            window.addEventListener('mouseup', () => {
+                if (!resizingSidebar) return;
+                resizingSidebar = false;
+                document.body.classList.remove('resizing-horizontal');
+                const storedWidth = clampNumber(Math.round(controlsPanel.offsetWidth), MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+                localStorage.setItem(STORAGE_KEYS.sidebarWidth, storedWidth);
+                drawGrid();
+            });
+        }
+
+        initializeEditorGroups();
+        refreshActiveEditors();
+
+        const positiveColorStops = [
+            { stop: 0, rgb: [255, 250, 165] },
+            { stop: 0.33, rgb: [253, 197, 110] },
+            { stop: 0.66, rgb: [244, 109, 67] },
+            { stop: 1, rgb: [180, 23, 44] },
+        ];
+        const negativeColorStops = [
+            { stop: 0, rgb: [194, 230, 255] },
+            { stop: 0.33, rgb: [123, 190, 222] },
+            { stop: 0.66, rgb: [50, 136, 189] },
+            { stop: 1, rgb: [3, 52, 118] },
+        ];
+
+        const createStatsTracker = () => ({ min: Infinity, max: -Infinity, count: 0 });
+        const resetStatsTracker = (tracker) => {
+            tracker.min = Infinity;
+            tracker.max = -Infinity;
+            tracker.count = 0;
+            return tracker;
+        };
+        const trackStatsValue = (tracker, value) => {
+            if (!tracker || !Number.isFinite(value)) return;
+            tracker.min = Math.min(tracker.min, value);
+            tracker.max = Math.max(tracker.max, value);
+            tracker.count += 1;
+        };
+
+        const clamp01 = (value) => Math.min(Math.max(value, 0), 1);
+        const sampleColorStops = (stops, ratio) => {
+            if (!stops.length) return [255, 255, 255];
+            const clamped = clamp01(ratio);
+            if (clamped <= stops[0].stop) return stops[0].rgb.slice();
+            for (let i = 0; i < stops.length - 1; i++) {
+                const left = stops[i];
+                const right = stops[i + 1];
+                if (clamped >= left.stop && clamped <= right.stop) {
+                    const span = right.stop - left.stop || 1;
+                    const t = (clamped - left.stop) / span;
+                    return left.rgb.map((channel, idx) =>
+                        Math.round(channel + (right.rgb[idx] - channel) * t)
+                    );
+                }
+            }
+            return stops[stops.length - 1].rgb.slice();
+        };
+        const accentuateRatio = (ratio, intensity) => {
+            const safeIntensity = Math.max(intensity, 1);
+            return clamp01(Math.pow(clamp01(ratio), 1 / safeIntensity));
+        };
+        const rgbArrayToCss = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+        const clampRatio = (value) => Math.min(Math.max(value, 0), 1);
+
+        const defaultHdrFunction = (input, context = {}) => {
+            if (!input) return 0;
+            const scale = (context && typeof context.scale === 'number' && Number.isFinite(context.scale))
+                ? context.scale
+                : 1;
+            const base = clamp01(input.ratio ?? 0);
+            const shoulder = Math.log1p(base * 8) / Math.log1p(8);
+            const gamma = Math.pow(base, 0.75);
+            const mix = 0.35;
+            let result = (1 - mix) * shoulder + mix * gamma;
+            if (scale < 1) {
+                result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
+            }
+            return clampRatio(result);
+        };
+
+        const defaultColorFunction = (value, stats, range, context = {}) => {
+            const safeMax = range.max > 0 ? range.max : 1;
+            const safeMin = range.min < 0 ? range.min : -1;
+            const scale = (context && typeof context.scale === 'number' && Number.isFinite(context.scale))
+                ? context.scale
+                : 1;
+            const intensity = scale < 1
+                ? Math.min(1.6, Math.pow(1 / Math.max(scale, 0.0001), 0.3))
+                : 1;
+
+            const applyHDR = (context && typeof context.applyHDR === 'function')
+                ? context.applyHDR
+                : (input) => defaultHdrFunction(input, { scale });
+
+            if (value >= 0) {
+                const hdrRatio = clampRatio(applyHDR({ ratio: value / safeMax, value, stats, range, polarity: 'positive', scale }));
+                const ratio = accentuateRatio(hdrRatio, intensity);
+                return rgbArrayToCss(sampleColorStops(positiveColorStops, ratio));
+            }
+            const hdrRatio = clampRatio(applyHDR({ ratio: Math.abs(value / safeMin), value, stats, range, polarity: 'negative', scale }));
+            const ratio = accentuateRatio(hdrRatio, intensity);
+            return rgbArrayToCss(sampleColorStops(negativeColorStops, ratio));
+        };
+        let config = {};
+        let grid = new Map();
+        let selectedNodeKey = null;
+        let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
+        this.config = config;
+        this.grid = grid;
+        this.selectedNodeKey = selectedNodeKey;
+        this.view = view;
+
+        const MIN_PIXEL_NODE_RADIUS = 3;
+        const MIN_PIXEL_EDGE_WIDTH = 0.6;
+        const MIN_PIXEL_SELECTION_WIDTH = 1.8;
+        const EDGE_RENDER_SCALE_THRESHOLD = 0.9;
+        const AGGREGATION_SCALE_THRESHOLD = 6;
+        const AGGREGATION_BUCKET_PIXELS = 8;
+        const VIEW_CULL_PADDING = 1.5;
+
+        function getNodeRadius() {
+            return Math.max(0.2, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
+        }
+
+        function getEdgeWidth() {
+            return Math.max(0.02, MIN_PIXEL_EDGE_WIDTH / Math.max(view.scale, 0.0001));
+        }
+
+        function getSelectionWidth() {
+            return Math.max(0.12, MIN_PIXEL_SELECTION_WIDTH / Math.max(view.scale, 0.0001));
+        }
+
+        function getCodeValue(id) {
+            if (codeEditors[id]) return codeEditors[id].getValue();
+            const field = document.getElementById(id);
+            return field ? field.value || '' : '';
+        }
+
+        function setCodeValue(id, value) {
+            const nextValue = value ?? '';
+            if (codeEditors[id]) {
+                if (codeEditors[id].getValue() !== nextValue) codeEditors[id].setValue(nextValue);
+                return;
+            }
+            const field = document.getElementById(id);
+            if (field) field.value = nextValue;
+        }
+
+        function setEditorError(id, hasError) {
+            if (codeEditors[id]) {
+                const wrapper = codeEditors[id].getWrapperElement();
+                if (hasError) {
+                    wrapper.classList.add('editor-error');
+                    wrapper.style.borderColor = 'var(--error-color)';
+                } else {
+                    wrapper.classList.remove('editor-error');
+                    wrapper.style.borderColor = '';
+                }
+            } else {
+                const field = document.getElementById(id);
+                if (field) field.style.borderColor = hasError ? 'var(--error-color)' : '';
+            }
+        }
+
+        function toggleCustomGradientInputs() {
+            customGradientInputs.style.display = controls.gradientMode.value === 'custom' ? 'flex' : 'none';
+        }
+
+        function toggleReunificationEditor() {
+            if (!reunificationEditorSection) return;
+            const isPersonalized = controls.reunification.value === 'personalized';
+            reunificationEditorSection.style.display = isPersonalized ? '' : 'none';
+            if (isPersonalized) {
+                ensureEditorExpanded();
+                if (editorGroups.has('reunification')) {
+                    setActiveEditor('reunification', 'reunificationLogic');
+                    refreshActiveEditors();
+                }
+            }
+        }
+
+        function createRootPathMeta() {
+            return {
+                depth: 0,
+                total: 1,
+                onesHistogram: { 0: 1 },
+                samples: [''],
+                sampleComplete: true,
+            };
+        }
+
+        function clonePathMeta(meta) {
+            if (!meta) return null;
+            return {
+                depth: meta.depth,
+                total: meta.total,
+                onesHistogram: Object.fromEntries(Object.entries(meta.onesHistogram || {}).map(([key, value]) => [Number(key), value])),
+                samples: Array.isArray(meta.samples) ? meta.samples.slice() : [],
+                sampleComplete: Boolean(meta.sampleComplete),
+            };
+        }
+
+        function advancePathMeta(parentMeta, branchIndex) {
+            if (!parentMeta || typeof parentMeta !== 'object') return null;
+            const nextDepth = parentMeta.depth + 1;
+            const onesIncrement = branchIndex === 1 ? 1 : 0;
+            const onesHistogram = {};
+            Object.entries(parentMeta.onesHistogram || {}).forEach(([key, count]) => {
+                const ones = Number(key);
+                const nextOnes = ones + onesIncrement;
+                onesHistogram[nextOnes] = (onesHistogram[nextOnes] || 0) + count;
+            });
+            let samples = [];
+            let sampleComplete = parentMeta.sampleComplete;
+            if (Array.isArray(parentMeta.samples) && parentMeta.samples.length) {
+                samples = parentMeta.samples.map(sample => `${sample}${branchIndex === 1 ? '1' : '0'}`);
+                if (samples.length > ENUMERATION_SAMPLE_LIMIT) {
+                    samples = samples.slice(0, ENUMERATION_SAMPLE_LIMIT);
+                    sampleComplete = false;
+                }
+            }
+            return {
+                depth: nextDepth,
+                total: parentMeta.total,
+                onesHistogram,
+                samples,
+                sampleComplete,
+            };
+        }
+
+        function mergeUniqueSamples(a = [], b = []) {
+            const merged = [...a, ...b];
+            const seen = new Set();
+            const result = [];
+            merged.forEach(sample => {
+                if (typeof sample !== 'string') return;
+                if (seen.has(sample)) return;
+                seen.add(sample);
+                result.push(sample);
+            });
+            return result.sort();
+        }
+
+        function mergePathMetas(baseMeta, additionMeta) {
+            if (!additionMeta) return baseMeta ? clonePathMeta(baseMeta) : null;
+            if (!baseMeta) return clonePathMeta(additionMeta);
+            const merged = {
+                depth: Math.max(baseMeta.depth, additionMeta.depth),
+                total: baseMeta.total + additionMeta.total,
+                onesHistogram: {},
+                samples: [],
+                sampleComplete: false,
+            };
+            const baseHistogram = baseMeta.onesHistogram || {};
+            const additionHistogram = additionMeta.onesHistogram || {};
+            Object.entries(baseHistogram).forEach(([key, count]) => {
+                const numericKey = Number(key);
+                merged.onesHistogram[numericKey] = (merged.onesHistogram[numericKey] || 0) + count;
+            });
+            Object.entries(additionHistogram).forEach(([key, count]) => {
+                const numericKey = Number(key);
+                merged.onesHistogram[numericKey] = (merged.onesHistogram[numericKey] || 0) + count;
+            });
+            const combinedSamples = mergeUniqueSamples(baseMeta.samples || [], additionMeta.samples || []);
+            if (combinedSamples.length <= ENUMERATION_SAMPLE_LIMIT && baseMeta.sampleComplete && additionMeta.sampleComplete && merged.total <= ENUMERATION_SAMPLE_LIMIT) {
+                merged.samples = combinedSamples;
+                merged.sampleComplete = combinedSamples.length === merged.total;
+            } else {
+                merged.samples = combinedSamples.slice(0, ENUMERATION_SAMPLE_LIMIT);
+                merged.sampleComplete = false;
+            }
+            return merged;
+        }
+
+        function prepareBinaryInfo(nodeKey) {
+            if (!binaryEnumerationSupported) {
+                return { supported: false, reason: 'Binary enumeration is available only when two moves are defined.' };
+            }
+            if (!nodeKey || !grid.has(nodeKey)) {
+                return { supported: false, reason: 'Node unavailable for binary analysis.' };
+            }
+            const node = grid.get(nodeKey);
+            if (!node || !node.pathMeta) {
+                return { supported: false, reason: 'Binary path metadata not generated for this node.' };
+            }
+            const meta = node.pathMeta;
+            const histogramEntries = Object.entries(meta.onesHistogram || {}).map(([onesKey, count]) => {
+                const ones = Number(onesKey);
+                const zeros = Math.max(0, meta.depth - ones);
+                return { ones, zeros, count };
+            }).sort((a, b) => a.ones - b.ones);
+            const minOnes = histogramEntries.length ? histogramEntries[0].ones : 0;
+            const maxOnes = histogramEntries.length ? histogramEntries[histogramEntries.length - 1].ones : 0;
+            const minZeros = histogramEntries.length ? Math.max(0, meta.depth - maxOnes) : meta.depth;
+            const maxZeros = histogramEntries.length ? Math.max(0, meta.depth - minOnes) : meta.depth;
+            return {
+                supported: true,
+                nodeKey,
+                meta,
+                depth: meta.depth,
+                totalPaths: meta.total,
+                histogramEntries,
+                minOnes,
+                maxOnes,
+                minZeros,
+                maxZeros,
+                samples: Array.isArray(meta.samples) ? meta.samples : [],
+                sampleComplete: Boolean(meta.sampleComplete),
+            };
+        }
+
+        function updateInspectorBinarySection(nodeKey) {
+            if (!inspectorFields.binarySection || !inspectorFields.binaryContent) return;
+            if (!nodeKey) {
+                inspectorFields.binarySection.classList.add('hidden');
+                inspectorFields.binaryContent.textContent = '';
+                return;
+            }
+            const info = prepareBinaryInfo(nodeKey);
+            const fragment = document.createDocumentFragment();
+            if (!info.supported) {
+                inspectorFields.binarySection.classList.remove('hidden');
                 const note = document.createElement('div');
                 note.className = 'binary-note';
-                note.textContent = `Showing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.`;
+                note.textContent = info.reason;
+                fragment.appendChild(note);
+                inspectorFields.binaryContent.innerHTML = '';
+                inspectorFields.binaryContent.appendChild(fragment);
+                return;
+            }
+            inspectorFields.binarySection.classList.remove('hidden');
+            const stats = document.createElement('div');
+            stats.className = 'binary-stat';
+            stats.innerHTML = `<strong>Total paths:</strong> ${info.totalPaths.toLocaleString()}`;
+            fragment.appendChild(stats);
+
+            const depthStat = document.createElement('div');
+            depthStat.className = 'binary-stat';
+            depthStat.innerHTML = `<strong>Depth:</strong> ${info.depth}`;
+            fragment.appendChild(depthStat);
+
+            const ratioStat = document.createElement('div');
+            ratioStat.className = 'binary-stat';
+            const zerosRange = info.minZeros === info.maxZeros
+                ? `${info.minZeros}`
+                : `${info.minZeros} – ${info.maxZeros}`;
+            const onesRange = info.minOnes === info.maxOnes
+                ? `${info.minOnes}`
+                : `${info.minOnes} – ${info.maxOnes}`;
+            ratioStat.innerHTML = `<strong>0s:</strong> ${zerosRange} &nbsp;•&nbsp; <strong>1s:</strong> ${onesRange}`;
+            fragment.appendChild(ratioStat);
+
+            if (info.histogramEntries.length) {
+                const distribution = document.createElement('div');
+                distribution.className = 'binary-distribution';
+                distribution.innerHTML = info.histogramEntries.map(entry => {
+                    return `C(${info.depth}, ${entry.ones}) = <strong>${entry.count.toLocaleString()}</strong> (1s=${entry.ones}, 0s=${entry.zeros})`;
+                }).join('<br>');
+                fragment.appendChild(distribution);
+            }
+
+            const binaryFlex = document.createElement('div');
+            binaryFlex.className = 'binary-flex';        
+
+            if (info.samples.length) {
+                const sampleLabel = document.createElement('div');
+                sampleLabel.className = 'binary-stat';
+                sampleLabel.innerHTML = '<strong>Enumerations:</strong>';
+                binaryFlex.appendChild(sampleLabel);
+                const sampleContainer = document.createElement('div');
+                sampleContainer.className = 'binary-sample';
+                info.samples.forEach(sample => {
+                    const code = document.createElement('code');
+                    code.textContent = sample || '∅';
+                    sampleContainer.appendChild(code);
+                });
+                binaryFlex.appendChild(sampleContainer);
+                if (!info.sampleComplete) {
+                    const note = document.createElement('div');
+                    note.className = 'binary-note';
+                    note.textContent = `Showing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.`;
+                    binaryFlex.appendChild(note);
+                }
+            } else if (info.totalPaths > 0) {
+                const note = document.createElement('div');
+                note.className = 'binary-note';
+                note.textContent = 'Enumeration list omitted to maintain performance.';
                 binaryFlex.appendChild(note);
             }
-        } else if (info.totalPaths > 0) {
-            const note = document.createElement('div');
-            note.className = 'binary-note';
-            note.textContent = 'Enumeration list omitted to maintain performance.';
-            binaryFlex.appendChild(note);
+
+            fragment.appendChild(binaryFlex)
+
+            inspectorFields.binaryContent.innerHTML = '';
+            inspectorFields.binaryContent.appendChild(fragment);
         }
 
-        fragment.appendChild(binaryFlex)
-
-        inspectorFields.binaryContent.innerHTML = '';
-        inspectorFields.binaryContent.appendChild(fragment);
-    }
-
-    function ensureBinaryHoverPopup() {
-        if (binaryHoverPopup) return binaryHoverPopup;
-        const popup = document.createElement('div');
-        popup.id = 'binaryHoverPopup';
-        document.body.appendChild(popup);
-        binaryHoverPopup = popup;
-        return popup;
-    }
-
-    function hideBinaryHoverPopup() {
-        if (!binaryHoverPopup) return;
-        binaryHoverPopup.style.display = 'none';
-        binaryHoverPopup.textContent = '';
-        currentHoverNodeKey = null;
-    }
-
-    function showBinaryHoverPopup(nodeKey, position) {
-        const popup = ensureBinaryHoverPopup();
-        const info = prepareBinaryInfo(nodeKey);
-        if (!info.supported) {
-            hideBinaryHoverPopup();
-            return;
+        function ensureBinaryHoverPopup() {
+            if (binaryHoverPopup) return binaryHoverPopup;
+            const popup = document.createElement('div');
+            popup.id = 'binaryHoverPopup';
+            document.body.appendChild(popup);
+            binaryHoverPopup = popup;
+            app.binaryHoverPopup = binaryHoverPopup;
+            return popup;
         }
-        currentHoverNodeKey = nodeKey;
-        const lines = [];
-        lines.push(`<h5>Node ${nodeKey}</h5>`);
-        lines.push(`<div class="binary-stat"><strong>Depth:</strong> ${info.depth}</div>`);
-        lines.push(`<div class="binary-stat"><strong>Total paths:</strong> ${info.totalPaths.toLocaleString()}</div>`);
-        if (info.histogramEntries.length) {
-            const distribution = info.histogramEntries.map(entry => `C(${info.depth}, ${entry.ones}) = <strong>${entry.count.toLocaleString()}</strong> (1s=${entry.ones}, 0s=${entry.zeros})`).join('<br>');
-            lines.push(`<div class="binary-distribution">${distribution}</div>`);
+
+        function hideBinaryHoverPopup() {
+            if (!binaryHoverPopup) return;
+            binaryHoverPopup.style.display = 'none';
+            binaryHoverPopup.textContent = '';
+            currentHoverNodeKey = null;
+            app.currentHoverNodeKey = currentHoverNodeKey;
         }
-        if (info.samples.length) {
-            const sampleChips = info.samples.slice(0, 8).map(sample => `<code>${sample || '∅'}</code>`).join(' ');
-            lines.push(`<div class="binary-sample">${sampleChips}</div>`);
-            if (!info.sampleComplete) {
-                lines.push(`<div class="binary-note">Previewing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.</div>`);
+
+        function showBinaryHoverPopup(nodeKey, position) {
+            const popup = ensureBinaryHoverPopup();
+            const info = prepareBinaryInfo(nodeKey);
+            if (!info.supported) {
+                hideBinaryHoverPopup();
+                return;
             }
-        } else if (info.totalPaths > 0) {
-            lines.push('<div class="binary-note">Enumeration list omitted to maintain performance.</div>');
+            currentHoverNodeKey = nodeKey;
+            app.currentHoverNodeKey = currentHoverNodeKey;
+            const lines = [];
+            lines.push(`<h5>Node ${nodeKey}</h5>`);
+            lines.push(`<div class="binary-stat"><strong>Depth:</strong> ${info.depth}</div>`);
+            lines.push(`<div class="binary-stat"><strong>Total paths:</strong> ${info.totalPaths.toLocaleString()}</div>`);
+            if (info.histogramEntries.length) {
+                const distribution = info.histogramEntries.map(entry => `C(${info.depth}, ${entry.ones}) = <strong>${entry.count.toLocaleString()}</strong> (1s=${entry.ones}, 0s=${entry.zeros})`).join('<br>');
+                lines.push(`<div class="binary-distribution">${distribution}</div>`);
+            }
+            if (info.samples.length) {
+                const sampleChips = info.samples.slice(0, 8).map(sample => `<code>${sample || '∅'}</code>`).join(' ');
+                lines.push(`<div class="binary-sample">${sampleChips}</div>`);
+                if (!info.sampleComplete) {
+                    lines.push(`<div class="binary-note">Previewing ${info.samples.length} of ${info.totalPaths.toLocaleString()} paths.</div>`);
+                }
+            } else if (info.totalPaths > 0) {
+                lines.push('<div class="binary-note">Enumeration list omitted to maintain performance.</div>');
+            }
+            popup.innerHTML = lines.join('');
+            popup.style.display = 'block';
+            const offsetX = 16;
+            const offsetY = 16;
+            const posX = Math.min(position.x + offsetX, window.innerWidth - popup.offsetWidth - 12);
+            const posY = Math.min(position.y + offsetY, window.innerHeight - popup.offsetHeight - 12);
+            popup.style.left = `${Math.max(12, posX)}px`;
+            popup.style.top = `${Math.max(12, posY)}px`;
         }
-        popup.innerHTML = lines.join('');
-        popup.style.display = 'block';
-        const offsetX = 16;
-        const offsetY = 16;
-        const posX = Math.min(position.x + offsetX, window.innerWidth - popup.offsetWidth - 12);
-        const posY = Math.min(position.y + offsetY, window.innerHeight - popup.offsetHeight - 12);
-        popup.style.left = `${Math.max(12, posX)}px`;
-        popup.style.top = `${Math.max(12, posY)}px`;
-    }
 
-    function getElementAnchorPosition(element) {
-        if (!element || !(element instanceof Element)) {
-            return { x: 0, y: 0 };
+        function getElementAnchorPosition(element) {
+            if (!element || !(element instanceof Element)) {
+                return { x: 0, y: 0 };
+            }
+            const rect = element.getBoundingClientRect();
+            return { x: rect.right, y: rect.top + rect.height / 2 };
         }
-        const rect = element.getBoundingClientRect();
-        return { x: rect.right, y: rect.top + rect.height / 2 };
-    }
 
-    function handleInspectorHover(event) {
-        if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
-        const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
-        if (!target) {
+        function handleInspectorHover(event) {
+            if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
+            const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
+            if (!target) {
+                hideBinaryHoverPopup();
+                return;
+            }
+            const nodeKey = target.dataset.nodeKey;
+            if (!nodeKey) return;
+            showBinaryHoverPopup(nodeKey, getElementAnchorPosition(target));
+        }
+
+        function handleInspectorFocus(event) {
+            if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
+            const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
+            if (!target) {
+                hideBinaryHoverPopup();
+                return;
+            }
+            const nodeKey = target.dataset.nodeKey;
+            if (!nodeKey) return;
+            showBinaryHoverPopup(nodeKey, getElementAnchorPosition(target));
+        }
+
+        function handleInspectorBlur(event) {
+            if (!ENABLE_HOVER_ENUMERATION_POPUP) return;
+            const related = event.relatedTarget;
+            if (related && inspectorPanel.contains(related)) return;
             hideBinaryHoverPopup();
-            return;
         }
-        const nodeKey = target.dataset.nodeKey;
-        if (!nodeKey) return;
-        showBinaryHoverPopup(nodeKey, getElementAnchorPosition(target));
-    }
 
-    function handleInspectorFocus(event) {
-        if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
-        const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
-        if (!target) {
-            hideBinaryHoverPopup();
-            return;
+        function handleCanvasBinaryHover(event) {
+            if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
+            if (view.isDragging) {
+                hideBinaryHoverPopup();
+                return;
+            }
+            const nodeKey = findNodeAt(event.clientX, event.clientY);
+            if (!nodeKey) {
+                hideBinaryHoverPopup();
+                return;
+            }
+            showBinaryHoverPopup(nodeKey, { x: event.clientX, y: event.clientY });
         }
-        const nodeKey = target.dataset.nodeKey;
-        if (!nodeKey) return;
-        showBinaryHoverPopup(nodeKey, getElementAnchorPosition(target));
-    }
 
-    function handleInspectorBlur(event) {
-        if (!ENABLE_HOVER_ENUMERATION_POPUP) return;
-        const related = event.relatedTarget;
-        if (related && inspectorPanel.contains(related)) return;
-        hideBinaryHoverPopup();
-    }
-
-    function handleCanvasBinaryHover(event) {
-        if (!ENABLE_HOVER_ENUMERATION_POPUP || !binaryEnumerationSupported) return;
-        if (view.isDragging) {
-            hideBinaryHoverPopup();
-            return;
-        }
-        const nodeKey = findNodeAt(event.clientX, event.clientY);
-        if (!nodeKey) {
-            hideBinaryHoverPopup();
-            return;
-        }
-        showBinaryHoverPopup(nodeKey, { x: event.clientX, y: event.clientY });
-    }
-
-    let runHandle = null;
-    function scheduleRun() {
-        if (runHandle) cancelAnimationFrame(runHandle);
-        runHandle = requestAnimationFrame(() => {
-            runHandle = null;
-            run();
-        });
-    }
-
-    if (window.CodeMirror) {
-        const applySizing = (editor) => {
-            if (!editor) return;
-            editor.setSize(null, '100%');
-        };
-
-        const createEditor = (id, control) => {
-            if (!control) return null;
-            const instance = CodeMirror.fromTextArea(control, {
-                mode: 'javascript',
-                theme: 'darcula',
-                lineNumbers: true,
-                lineWrapping: true,
-                autoCloseBrackets: true,
-                styleActiveLine: true,
+        let runHandle = null;
+        app.runHandle = runHandle;
+        const debouncedRun = new Debouncer(500, () => scheduleRunImmediate());
+        app.debouncedRun = debouncedRun;
+        function scheduleRunImmediate() {
+            debouncedRun.cancel();
+            if (runHandle) cancelAnimationFrame(runHandle);
+            runHandle = requestAnimationFrame(() => {
+                runHandle = null;
+                app.runHandle = null;
+                run();
             });
-            applySizing(instance);
-            instance.on('change', scheduleRun);
-            return instance;
-        };
+            app.runHandle = runHandle;
+        }
+        function scheduleRunDebounced() {
+            debouncedRun.trigger();
+        }
 
-        codeEditors.propagationPrimaryLogic = createEditor('propagationPrimaryLogic', controls.propagationPrimary);
-        codeEditors.propagationSecondaryLogic = createEditor('propagationSecondaryLogic', controls.propagationSecondary);
-        codeEditors.effectiveValueLogic = createEditor('effectiveValueLogic', controls.effectiveValueLogic);
-        codeEditors.backpropLogic = createEditor('backpropLogic', controls.backpropLogic);
-        codeEditors.reunificationLogic = createEditor('reunificationLogic', controls.reunificationLogic);
-        codeEditors.colorLogic = createEditor('colorLogic', controls.colorLogic);
-        codeEditors.hdrLogic = createEditor('hdrLogic', controls.hdrLogic);
-        refreshActiveEditors();
-    } else {
-        [
-            controls.propagationPrimary,
-            controls.propagationSecondary,
-            controls.effectiveValueLogic,
-            controls.backpropLogic,
-            controls.reunificationLogic,
-            controls.colorLogic,
-            controls.hdrLogic,
-        ].forEach(control => {
-            if (control) control.addEventListener('input', scheduleRun);
-        });
-    }
+        if (window.CodeMirror) {
+            const applySizing = (editor) => {
+                if (!editor) return;
+                editor.setSize(null, '100%');
+            };
 
-    function getDimensionDefaults(key) {
-        if (!config.dimensionDefaults) return {};
-        return config.dimensionDefaults[key] || {};
-    }
+            const createEditor = (id, control) => {
+                if (!control) return null;
+                const instance = CodeMirror.fromTextArea(control, {
+                    mode: 'javascript',
+                    theme: 'darcula',
+                    lineNumbers: true,
+                    lineWrapping: true,
+                    autoCloseBrackets: true,
+                    styleActiveLine: true,
+                });
+                applySizing(instance);
+                instance.on('change', scheduleRunDebounced);
+                return instance;
+            };
 
-    function createEmptyDimensionState(key) {
-        const defaults = getDimensionDefaults(key);
-        return {
-            value: Number.isFinite(defaults.value) ? defaults.value : 0,
-            isActive: defaults.isActive === true,
-            contributors: Number.isFinite(defaults.contributors) ? defaults.contributors : 0,
-            meta: [],
-        };
-    }
+            codeEditors.propagationPrimaryLogic = createEditor('propagationPrimaryLogic', controls.propagationPrimary);
+            codeEditors.propagationSecondaryLogic = createEditor('propagationSecondaryLogic', controls.propagationSecondary);
+            codeEditors.effectiveValueLogic = createEditor('effectiveValueLogic', controls.effectiveValueLogic);
+            codeEditors.backpropLogic = createEditor('backpropLogic', controls.backpropLogic);
+            codeEditors.reunificationLogic = createEditor('reunificationLogic', controls.reunificationLogic);
+            codeEditors.colorLogic = createEditor('colorLogic', controls.colorLogic);
+            codeEditors.hdrLogic = createEditor('hdrLogic', controls.hdrLogic);
+            refreshActiveEditors();
+        } else {
+            [
+                controls.propagationPrimary,
+                controls.propagationSecondary,
+                controls.effectiveValueLogic,
+                controls.backpropLogic,
+                controls.reunificationLogic,
+                controls.colorLogic,
+                controls.hdrLogic,
+            ].forEach(control => {
+                if (control) control.addEventListener('input', scheduleRunDebounced);
+            });
+        }
 
-    function createInitialDimensions() {
-        const dimensions = {};
-        if (!Array.isArray(config.propagationDimensions)) return dimensions;
-        config.propagationDimensions.forEach(dimension => {
-            dimensions[dimension.key] = {
-                value: Number.isFinite(dimension.defaultValue) ? dimension.defaultValue : 0,
-                isActive: dimension.defaultActive === true,
-                contributors: dimension.defaultActive ? 1 : 0,
+        function getDimensionDefaults(key) {
+            if (!config.dimensionDefaults) return {};
+            return config.dimensionDefaults[key] || {};
+        }
+
+        function createEmptyDimensionState(key) {
+            const defaults = getDimensionDefaults(key);
+            return {
+                value: Number.isFinite(defaults.value) ? defaults.value : 0,
+                isActive: defaults.isActive === true,
+                contributors: Number.isFinite(defaults.contributors) ? defaults.contributors : 0,
                 meta: [],
             };
-        });
-        return dimensions;
-    }
+        }
 
-    function cloneDimensions(dimensions) {
-        if (!dimensions) return {};
-        const clone = {};
-        Object.entries(dimensions).forEach(([key, payload]) => {
-            clone[key] = {
-                value: Number.isFinite(payload?.value) ? payload.value : 0,
-                isActive: Boolean(payload?.isActive),
-                contributors: Number.isFinite(payload?.contributors) ? payload.contributors : 0,
-                meta: Array.isArray(payload?.meta) ? payload.meta.slice() : [],
-            };
-        });
-        return clone;
-    }
-
-    function normalizeDimensionResult(raw) {
-        if (raw === null || raw === undefined) return null;
-        if (typeof raw === 'number') {
-            if (!Number.isFinite(raw)) return null;
-            return { value: raw, isActive: true, contributors: 1, meta: [] };
-        }
-        if (typeof raw === 'object') {
-            const value = Number.isFinite(raw.value) ? raw.value : 0;
-            const isActive = raw.isActive !== false;
-            const contributors = Number.isFinite(raw.contributors) ? raw.contributors : 1;
-            let meta = [];
-            if (raw.meta !== undefined) {
-                meta = Array.isArray(raw.meta) ? raw.meta.slice() : [raw.meta];
-            }
-            return { value, isActive, contributors, meta };
-        }
-        return null;
-    }
-
-    function buildReunificationContext(values) {
-        const count = values.length;
-        if (!count) {
-            return { count: 0, sum: 0, average: 0, min: 0, max: 0 };
-        }
-        let sum = 0;
-        let min = values[0];
-        let max = values[0];
-        for (let i = 0; i < count; i++) {
-            const value = values[i];
-            sum += value;
-            if (value < min) min = value;
-            if (value > max) max = value;
-        }
-        const average = sum / count;
-        return { count, sum, average, min, max };
-    }
-
-    function combineValuesByReunification(values, strategy, customFn) {
-        if (!values.length) return 0;
-        if (strategy === 'personalized') {
-            const safeValues = values.slice();
-            const context = buildReunificationContext(safeValues);
-            if (typeof customFn === 'function') {
-                try {
-                    const result = customFn(safeValues, context);
-                    if (Number.isFinite(result)) return result;
-                } catch (error) {
-                    console.warn('Custom reunification logic error', error);
-                }
-            }
-            return context.sum;
-        }
-        switch (strategy) {
-            case 'average':
-                return values.reduce((sum, value) => sum + value, 0) / values.length;
-            case 'max':
-                return Math.max(...values);
-            case 'sum':
-            default:
-                return values.reduce((sum, value) => sum + value, 0);
-        }
-    }
-
-    function mergeIncomingDimensionResults(incoming, reunification, customFn) {
-        const aggregates = new Map();
-        incoming.forEach(entry => {
-            const dimensionResults = entry.dimensions || {};
-            Object.entries(dimensionResults).forEach(([key, result]) => {
-                if (!aggregates.has(key)) {
-                    aggregates.set(key, { values: [], activeCount: 0, contributors: 0, meta: [] });
-                }
-                const bucket = aggregates.get(key);
-                if (result && Number.isFinite(result.value)) {
-                    bucket.values.push(result.value);
-                    bucket.contributors += Number.isFinite(result.contributors) ? result.contributors : 1;
-                }
-                if (result && result.isActive) bucket.activeCount += 1;
-                if (result && result.meta) {
-                    const meta = Array.isArray(result.meta) ? result.meta : [result.meta];
-                    bucket.meta.push(...meta.filter(item => item !== undefined));
-                }
-            });
-        });
-        if (Array.isArray(config.propagationDimensions)) {
+        function createInitialDimensions() {
+            const dimensions = {};
+            if (!Array.isArray(config.propagationDimensions)) return dimensions;
             config.propagationDimensions.forEach(dimension => {
-                if (!aggregates.has(dimension.key)) {
-                    aggregates.set(dimension.key, { values: [], activeCount: 0, contributors: 0, meta: [] });
+                dimensions[dimension.key] = {
+                    value: Number.isFinite(dimension.defaultValue) ? dimension.defaultValue : 0,
+                    isActive: dimension.defaultActive === true,
+                    contributors: dimension.defaultActive ? 1 : 0,
+                    meta: [],
+                };
+            });
+            return dimensions;
+        }
+
+        function cloneDimensions(dimensions) {
+            if (!dimensions) return {};
+            const clone = {};
+            Object.entries(dimensions).forEach(([key, payload]) => {
+                clone[key] = {
+                    value: Number.isFinite(payload?.value) ? payload.value : 0,
+                    isActive: Boolean(payload?.isActive),
+                    contributors: Number.isFinite(payload?.contributors) ? payload.contributors : 0,
+                    meta: Array.isArray(payload?.meta) ? payload.meta.slice() : [],
+                };
+            });
+            return clone;
+        }
+
+        function normalizeDimensionResult(raw) {
+            if (raw === null || raw === undefined) return null;
+            if (typeof raw === 'number') {
+                if (!Number.isFinite(raw)) return null;
+                return { value: raw, isActive: true, contributors: 1, meta: [] };
+            }
+            if (typeof raw === 'object') {
+                const value = Number.isFinite(raw.value) ? raw.value : 0;
+                const isActive = raw.isActive !== false;
+                const contributors = Number.isFinite(raw.contributors) ? raw.contributors : 1;
+                let meta = [];
+                if (raw.meta !== undefined) {
+                    meta = Array.isArray(raw.meta) ? raw.meta.slice() : [raw.meta];
+                }
+                return { value, isActive, contributors, meta };
+            }
+            return null;
+        }
+
+        function buildReunificationContext(values) {
+            const count = values.length;
+            if (!count) {
+                return { count: 0, sum: 0, average: 0, min: 0, max: 0 };
+            }
+            let sum = 0;
+            let min = values[0];
+            let max = values[0];
+            for (let i = 0; i < count; i++) {
+                const value = values[i];
+                sum += value;
+                if (value < min) min = value;
+                if (value > max) max = value;
+            }
+            const average = sum / count;
+            return { count, sum, average, min, max };
+        }
+
+        function combineValuesByReunification(values, strategy, customFn) {
+            if (!values.length) return 0;
+            if (strategy === 'personalized') {
+                const safeValues = values.slice();
+                const context = buildReunificationContext(safeValues);
+                if (typeof customFn === 'function') {
+                    try {
+                        const result = customFn(safeValues, context);
+                        if (Number.isFinite(result)) return result;
+                    } catch (error) {
+                        console.warn('Custom reunification logic error', error);
+                    }
+                }
+                return context.sum;
+            }
+            switch (strategy) {
+                case 'average':
+                    return values.reduce((sum, value) => sum + value, 0) / values.length;
+                case 'max':
+                    return Math.max(...values);
+                case 'sum':
+                default:
+                    return values.reduce((sum, value) => sum + value, 0);
+            }
+        }
+
+        function mergeIncomingDimensionResults(incoming, reunification, customFn) {
+            const aggregates = new Map();
+            incoming.forEach(entry => {
+                const dimensionResults = entry.dimensions || {};
+                Object.entries(dimensionResults).forEach(([key, result]) => {
+                    if (!aggregates.has(key)) {
+                        aggregates.set(key, { values: [], activeCount: 0, contributors: 0, meta: [] });
+                    }
+                    const bucket = aggregates.get(key);
+                    if (result && Number.isFinite(result.value)) {
+                        bucket.values.push(result.value);
+                        bucket.contributors += Number.isFinite(result.contributors) ? result.contributors : 1;
+                    }
+                    if (result && result.isActive) bucket.activeCount += 1;
+                    if (result && result.meta) {
+                        const meta = Array.isArray(result.meta) ? result.meta : [result.meta];
+                        bucket.meta.push(...meta.filter(item => item !== undefined));
+                    }
+                });
+            });
+            if (Array.isArray(config.propagationDimensions)) {
+                config.propagationDimensions.forEach(dimension => {
+                    if (!aggregates.has(dimension.key)) {
+                        aggregates.set(dimension.key, { values: [], activeCount: 0, contributors: 0, meta: [] });
+                    }
+                });
+            }
+            aggregates.forEach(bucket => {
+                bucket.value = combineValuesByReunification(bucket.values, reunification, customFn);
+                if (!Number.isFinite(bucket.contributors) || bucket.contributors <= 0) {
+                    bucket.contributors = bucket.values.length;
                 }
             });
+            return aggregates;
         }
-        aggregates.forEach(bucket => {
-            bucket.value = combineValuesByReunification(bucket.values, reunification, customFn);
-            if (!Number.isFinite(bucket.contributors) || bucket.contributors <= 0) {
-                bucket.contributors = bucket.values.length;
-            }
-        });
-        return aggregates;
-    }
 
-    function finalizeDimensionAggregates(aggregates) {
-        const result = {};
-        aggregates.forEach((bucket, key) => {
-            result[key] = {
-                value: Number.isFinite(bucket.value) ? bucket.value : 0,
-                isActive: bucket.activeCount > 0,
-                contributors: Number.isFinite(bucket.contributors) ? bucket.contributors : (bucket.values?.length || 0),
-                meta: Array.isArray(bucket.meta) ? bucket.meta.slice() : [],
-            };
-        });
-        return result;
-    }
-
-    function mergeDimensionStates(existing, incoming) {
-        const base = cloneDimensions(existing);
-        Object.entries(incoming || {}).forEach(([key, addition]) => {
-            const current = base[key] || createEmptyDimensionState(key);
-            const valueDelta = Number.isFinite(addition?.value) ? addition.value : 0;
-            current.value += valueDelta;
-            current.isActive = current.isActive || Boolean(addition?.isActive);
-            const contributorDelta = Number.isFinite(addition?.contributors) ? addition.contributors : (valueDelta !== 0 ? 1 : 0);
-            current.contributors += contributorDelta;
-            if (Array.isArray(addition?.meta) && addition.meta.length) {
-                current.meta.push(...addition.meta);
-            }
-            base[key] = current;
-        });
-        return base;
-    }
-
-    function evaluateEffectiveValue(dimensions, context = {}) {
-        const safeDimensions = dimensions || {};
-        try {
-            if (typeof config.effectiveValueFn === 'function') {
-                const dimensionKeys = Array.isArray(config.propagationDimensions)
-                    ? config.propagationDimensions.map(d => d.key)
-                    : Object.keys(safeDimensions);
-                const result = config.effectiveValueFn(safeDimensions, { ...context, dimensionKeys });
-                if (Number.isFinite(result)) return result;
-            }
-        } catch (error) {
-            console.warn('Effective value logic error', error);
-        }
-        const primary = safeDimensions.primary;
-        if (primary && Number.isFinite(primary.value)) return primary.value;
-        const fallbackKey = Object.keys(safeDimensions)[0];
-        if (fallbackKey) {
-            const candidate = safeDimensions[fallbackKey];
-            if (candidate && Number.isFinite(candidate.value)) return candidate.value;
-        }
-        return 0;
-    }
-
-    function buildBackpropState(nodeKey, node) {
-        return {
-            key: nodeKey,
-            value: Number.isFinite(node.value) ? node.value : 0,
-            dimensions: cloneDimensions(node.dimensions || createInitialDimensions()),
-            generation: node.gen,
-        };
-    }
-
-    function accumulateNodeUpdate(container, nodeKey, update) {
-        if (!update || typeof update !== 'object') return;
-        if (!container.has(nodeKey)) {
-            container.set(nodeKey, {
-                valueDelta: 0,
-                valueOverride: null,
-                dimensions: new Map(),
+        function finalizeDimensionAggregates(aggregates) {
+            const result = {};
+            aggregates.forEach((bucket, key) => {
+                result[key] = {
+                    value: Number.isFinite(bucket.value) ? bucket.value : 0,
+                    isActive: bucket.activeCount > 0,
+                    contributors: Number.isFinite(bucket.contributors) ? bucket.contributors : (bucket.values?.length || 0),
+                    meta: Array.isArray(bucket.meta) ? bucket.meta.slice() : [],
+                };
             });
+            return result;
         }
-        const entry = container.get(nodeKey);
-        if (typeof update.valueOverride === 'number' && Number.isFinite(update.valueOverride)) {
-            entry.valueOverride = update.valueOverride;
-        } else if (typeof update.valueDelta === 'number' && Number.isFinite(update.valueDelta)) {
-            entry.valueDelta += update.valueDelta;
-        }
-        if (update.dimensions && typeof update.dimensions === 'object') {
-            Object.entries(update.dimensions).forEach(([key, delta]) => {
-                const numericDelta = Number(delta);
-                if (!Number.isFinite(numericDelta)) return;
-                entry.dimensions.set(key, (entry.dimensions.get(key) || 0) + numericDelta);
-            });
-        }
-    }
 
-    function applyAccumulatedUpdates(updateMap, step) {
-        updateMap.forEach((descriptor, nodeKey) => {
-            const node = grid.get(nodeKey);
-            if (!node) return;
-            if (!node.dimensions) node.dimensions = createInitialDimensions();
-            if (descriptor.dimensions.size) {
-                const deltaState = {};
-                descriptor.dimensions.forEach((delta, dimKey) => {
-                    deltaState[dimKey] = {
-                        value: delta,
-                        isActive: Math.abs(delta) > 1e-9,
-                        contributors: 1,
-                        meta: [],
-                    };
-                });
-                node.dimensions = mergeDimensionStates(node.dimensions, deltaState);
+        function mergeDimensionStates(existing, incoming) {
+            const base = cloneDimensions(existing);
+            Object.entries(incoming || {}).forEach(([key, addition]) => {
+                const current = base[key] || createEmptyDimensionState(key);
+                const valueDelta = Number.isFinite(addition?.value) ? addition.value : 0;
+                current.value += valueDelta;
+                current.isActive = current.isActive || Boolean(addition?.isActive);
+                const contributorDelta = Number.isFinite(addition?.contributors) ? addition.contributors : (valueDelta !== 0 ? 1 : 0);
+                current.contributors += contributorDelta;
+                if (Array.isArray(addition?.meta) && addition.meta.length) {
+                    current.meta.push(...addition.meta);
+                }
+                base[key] = current;
+            });
+            return base;
+        }
+
+        function evaluateEffectiveValue(dimensions, context = {}) {
+            const safeDimensions = dimensions || {};
+            try {
+                if (typeof config.effectiveValueFn === 'function') {
+                    const dimensionKeys = Array.isArray(config.propagationDimensions)
+                        ? config.propagationDimensions.map(d => d.key)
+                        : Object.keys(safeDimensions);
+                    const result = config.effectiveValueFn(safeDimensions, { ...context, dimensionKeys });
+                    if (Number.isFinite(result)) return result;
+                }
+            } catch (error) {
+                console.warn('Effective value logic error', error);
             }
-            if (descriptor.valueOverride !== null && Number.isFinite(descriptor.valueOverride)) {
-                node.value = descriptor.valueOverride;
-            } else {
-                node.value += descriptor.valueDelta;
+            const primary = safeDimensions.primary;
+            if (primary && Number.isFinite(primary.value)) return primary.value;
+            const fallbackKey = Object.keys(safeDimensions)[0];
+            if (fallbackKey) {
+                const candidate = safeDimensions[fallbackKey];
+                if (candidate && Number.isFinite(candidate.value)) return candidate.value;
             }
-            node.value = evaluateEffectiveValue(node.dimensions, {
+            return 0;
+        }
+
+        function buildBackpropState(nodeKey, node) {
+            return {
                 key: nodeKey,
+                value: Number.isFinite(node.value) ? node.value : 0,
+                dimensions: cloneDimensions(node.dimensions || createInitialDimensions()),
                 generation: node.gen,
-                phase: 'backprop',
-                step,
-            });
-        });
-    }
+            };
+        }
 
-    function applyBackpropagation(steps) {
-        if (!Number.isFinite(steps) || steps <= 0 || typeof config.backpropFn !== 'function') return;
-        const generationBuckets = new Map();
-        grid.forEach((node, key) => {
-            if (!generationBuckets.has(node.gen)) generationBuckets.set(node.gen, []);
-            generationBuckets.get(node.gen).push([key, node]);
-        });
-        const generations = Array.from(generationBuckets.keys()).sort((a, b) => b - a);
+        function accumulateNodeUpdate(container, nodeKey, update) {
+            if (!update || typeof update !== 'object') return;
+            if (!container.has(nodeKey)) {
+                container.set(nodeKey, {
+                    valueDelta: 0,
+                    valueOverride: null,
+                    dimensions: new Map(),
+                });
+            }
+            const entry = container.get(nodeKey);
+            if (typeof update.valueOverride === 'number' && Number.isFinite(update.valueOverride)) {
+                entry.valueOverride = update.valueOverride;
+            } else if (typeof update.valueDelta === 'number' && Number.isFinite(update.valueDelta)) {
+                entry.valueDelta += update.valueDelta;
+            }
+            if (update.dimensions && typeof update.dimensions === 'object') {
+                Object.entries(update.dimensions).forEach(([key, delta]) => {
+                    const numericDelta = Number(delta);
+                    if (!Number.isFinite(numericDelta)) return;
+                    entry.dimensions.set(key, (entry.dimensions.get(key) || 0) + numericDelta);
+                });
+            }
+        }
 
-        for (let step = 0; step < steps; step++) {
-            const parentUpdates = new Map();
-            const childUpdates = new Map();
-
-            generations.forEach(generation => {
-                const nodes = generationBuckets.get(generation) || [];
-                nodes.forEach(([childKey, childNode]) => {
-                    if (!Array.isArray(childNode.parents) || !childNode.parents.length) return;
-                    childNode.parents.forEach(parentKey => {
-                        const parentNode = grid.get(parentKey);
-                        if (!parentNode) return;
-                        let result = null;
-                        try {
-                            result = config.backpropFn(
-                                buildBackpropState(childKey, childNode),
-                                buildBackpropState(parentKey, parentNode),
-                                {
-                                    generation,
-                                    step,
-                                    totalSteps: steps,
-                                    childKey,
-                                    parentKey,
-                                }
-                            );
-                        } catch (error) {
-                            console.warn('Backprop logic error', error);
-                        }
-                        if (!result) return;
-                        if (result.parent) accumulateNodeUpdate(parentUpdates, parentKey, result.parent);
-                        if (result.child) accumulateNodeUpdate(childUpdates, childKey, result.child);
+        function applyAccumulatedUpdates(updateMap, step) {
+            updateMap.forEach((descriptor, nodeKey) => {
+                const node = grid.get(nodeKey);
+                if (!node) return;
+                if (!node.dimensions) node.dimensions = createInitialDimensions();
+                if (descriptor.dimensions.size) {
+                    const deltaState = {};
+                    descriptor.dimensions.forEach((delta, dimKey) => {
+                        deltaState[dimKey] = {
+                            value: delta,
+                            isActive: Math.abs(delta) > 1e-9,
+                            contributors: 1,
+                            meta: [],
+                        };
                     });
+                    node.dimensions = mergeDimensionStates(node.dimensions, deltaState);
+                }
+                if (descriptor.valueOverride !== null && Number.isFinite(descriptor.valueOverride)) {
+                    node.value = descriptor.valueOverride;
+                } else {
+                    node.value += descriptor.valueDelta;
+                }
+                node.value = evaluateEffectiveValue(node.dimensions, {
+                    key: nodeKey,
+                    generation: node.gen,
+                    phase: 'backprop',
+                    step,
                 });
             });
-
-            applyAccumulatedUpdates(parentUpdates, step);
-            applyAccumulatedUpdates(childUpdates, step);
         }
-    }
 
-    function generateGrid() {
-        grid.clear();
-        selectedNodeKey = null;
-        const startNodeKey = "0,0";
-        const rootDimensions = createInitialDimensions();
-        const rootValue = evaluateEffectiveValue(rootDimensions, {
-            key: startNodeKey,
-            generation: 0,
-            phase: 'seed',
-        });
-        grid.set(startNodeKey, {
-            value: rootValue,
-            dimensions: rootDimensions,
-            gen: 0,
-            parents: [],
-            children: [],
-            pathMeta: binaryEnumerationSupported ? createRootPathMeta() : null,
-        });
-        let frontier = new Set([startNodeKey]);
+        function applyBackpropagation(steps) {
+            if (!Number.isFinite(steps) || steps <= 0 || typeof config.backpropFn !== 'function') return;
+            const generationBuckets = new Map();
+            grid.forEach((node, key) => {
+                if (!generationBuckets.has(node.gen)) generationBuckets.set(node.gen, []);
+                generationBuckets.get(node.gen).push([key, node]);
+            });
+            const generations = Array.from(generationBuckets.keys()).sort((a, b) => b - a);
 
-        for (let generationIndex = 0; generationIndex < config.generations; generationIndex++) {
-            const nextFrontier = new Set();
-            const contributions = new Map();
+            for (let step = 0; step < steps; step++) {
+                const parentUpdates = new Map();
+                const childUpdates = new Map();
 
-            frontier.forEach(parentKey => {
-                const parentNode = grid.get(parentKey);
-                if (!parentNode) return;
-                const [x, y] = parentKey.split(',').map(Number);
-                const parentDimensions = cloneDimensions(parentNode.dimensions);
-
-                config.moves.forEach((move, moveIndex) => {
-                    const childX = x + move[0];
-                    const childY = y + move[1];
-                    const childKey = `${childX},${childY}`;
-                    const dimensionResults = {};
-
-                    if (Array.isArray(config.propagationDimensions)) {
-                        config.propagationDimensions.forEach(dimension => {
-                            let output = null;
+                generations.forEach(generation => {
+                    const nodes = generationBuckets.get(generation) || [];
+                    nodes.forEach(([childKey, childNode]) => {
+                        if (!Array.isArray(childNode.parents) || !childNode.parents.length) return;
+                        childNode.parents.forEach(parentKey => {
+                            const parentNode = grid.get(parentKey);
+                            if (!parentNode) return;
+                            let result = null;
                             try {
-                                output = dimension.fn(
-                                    parentNode.value,
-                                    parentDimensions,
-                                    moveIndex,
-                                    move,
+                                result = config.backpropFn(
+                                    buildBackpropState(childKey, childNode),
+                                    buildBackpropState(parentKey, parentNode),
                                     {
+                                        generation,
+                                        step,
+                                        totalSteps: steps,
+                                        childKey,
                                         parentKey,
-                                        parentGeneration: parentNode.gen,
-                                        moveIndex,
-                                        move,
-                                        generation: generationIndex,
                                     }
                                 );
                             } catch (error) {
-                                console.warn(`Propagation "${dimension.key}" error`, error);
-                                output = null;
+                                console.warn('Backprop logic error', error);
                             }
-                            dimensionResults[dimension.key] = normalizeDimensionResult(output);
+                            if (!result) return;
+                            if (result.parent) accumulateNodeUpdate(parentUpdates, parentKey, result.parent);
+                            if (result.child) accumulateNodeUpdate(childUpdates, childKey, result.child);
                         });
-                    }
-
-                    if (!Array.isArray(parentNode.children)) parentNode.children = [];
-                    if (!parentNode.children.includes(childKey)) parentNode.children.push(childKey);
-                    if (!contributions.has(childKey)) contributions.set(childKey, []);
-                    contributions.get(childKey).push({
-                        parentKey,
-                        moveIndex,
-                        dimensions: dimensionResults,
                     });
                 });
+
+                applyAccumulatedUpdates(parentUpdates, step);
+                applyAccumulatedUpdates(childUpdates, step);
+            }
+        }
+
+        function generateGrid() {
+            grid.clear();
+            selectedNodeKey = null;
+            app.selectedNodeKey = selectedNodeKey;
+            const startNodeKey = "0,0";
+            const rootDimensions = createInitialDimensions();
+            const rootValue = evaluateEffectiveValue(rootDimensions, {
+                key: startNodeKey,
+                generation: 0,
+                phase: 'seed',
             });
+            grid.set(startNodeKey, {
+                value: rootValue,
+                dimensions: rootDimensions,
+                gen: 0,
+                parents: [],
+                children: [],
+                pathMeta: binaryEnumerationSupported ? createRootPathMeta() : null,
+            });
+            let frontier = new Set([startNodeKey]);
 
-            contributions.forEach((incoming, childKey) => {
-                const parentKeys = Array.from(new Set(incoming.map(entry => entry.parentKey)));
-                const aggregates = mergeIncomingDimensionResults(incoming, config.reunification, config.reunificationFn);
-                const childDimensions = finalizeDimensionAggregates(aggregates);
-                const effectiveValue = evaluateEffectiveValue(childDimensions, {
-                    key: childKey,
-                    parents: parentKeys,
-                    generation: generationIndex + 1,
-                    phase: 'forward',
+            for (let generationIndex = 0; generationIndex < config.generations; generationIndex++) {
+                const nextFrontier = new Set();
+                const contributions = new Map();
+
+                frontier.forEach(parentKey => {
+                    const parentNode = grid.get(parentKey);
+                    if (!parentNode) return;
+                    const [x, y] = parentKey.split(',').map(Number);
+                    const parentDimensions = cloneDimensions(parentNode.dimensions);
+
+                    config.moves.forEach((move, moveIndex) => {
+                        const childX = x + move[0];
+                        const childY = y + move[1];
+                        const childKey = `${childX},${childY}`;
+                        const dimensionResults = {};
+
+                        if (Array.isArray(config.propagationDimensions)) {
+                            config.propagationDimensions.forEach(dimension => {
+                                let output = null;
+                                try {
+                                    output = dimension.fn(
+                                        parentNode.value,
+                                        parentDimensions,
+                                        moveIndex,
+                                        move,
+                                        {
+                                            parentKey,
+                                            parentGeneration: parentNode.gen,
+                                            moveIndex,
+                                            move,
+                                            generation: generationIndex,
+                                        }
+                                    );
+                                } catch (error) {
+                                    console.warn(`Propagation "${dimension.key}" error`, error);
+                                    output = null;
+                                }
+                                dimensionResults[dimension.key] = normalizeDimensionResult(output);
+                            });
+                        }
+
+                        if (!Array.isArray(parentNode.children)) parentNode.children = [];
+                        if (!parentNode.children.includes(childKey)) parentNode.children.push(childKey);
+                        if (!contributions.has(childKey)) contributions.set(childKey, []);
+                        contributions.get(childKey).push({
+                            parentKey,
+                            moveIndex,
+                            dimensions: dimensionResults,
+                        });
+                    });
                 });
 
-                let childPathMeta = null;
-                if (binaryEnumerationSupported) {
-                    incoming.forEach(entry => {
-                        const parentNode = grid.get(entry.parentKey);
-                        if (!parentNode || !parentNode.pathMeta) return;
-                        const advanced = advancePathMeta(parentNode.pathMeta, entry.moveIndex);
-                        if (!advanced) return;
-                        childPathMeta = mergePathMetas(childPathMeta, advanced);
-                    });
-                }
-
-                if (grid.has(childKey)) {
-                    const childNode = grid.get(childKey);
-                    childNode.dimensions = mergeDimensionStates(childNode.dimensions, childDimensions);
-                    childNode.value = evaluateEffectiveValue(childNode.dimensions, {
+                contributions.forEach((incoming, childKey) => {
+                    const parentKeys = Array.from(new Set(incoming.map(entry => entry.parentKey)));
+                    const aggregates = mergeIncomingDimensionResults(incoming, config.reunification, config.reunificationFn);
+                    const childDimensions = finalizeDimensionAggregates(aggregates);
+                    const effectiveValue = evaluateEffectiveValue(childDimensions, {
                         key: childKey,
                         parents: parentKeys,
                         generation: generationIndex + 1,
-                        phase: 'merge',
+                        phase: 'forward',
                     });
-                    if (!Array.isArray(childNode.parents)) childNode.parents = [];
-                    parentKeys.forEach(parentKey => {
-                        if (!childNode.parents.includes(parentKey)) childNode.parents.push(parentKey);
-                    });
-                    if (binaryEnumerationSupported && childPathMeta) {
-                        childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
+
+                    let childPathMeta = null;
+                    if (binaryEnumerationSupported) {
+                        incoming.forEach(entry => {
+                            const parentNode = grid.get(entry.parentKey);
+                            if (!parentNode || !parentNode.pathMeta) return;
+                            const advanced = advancePathMeta(parentNode.pathMeta, entry.moveIndex);
+                            if (!advanced) return;
+                            childPathMeta = mergePathMetas(childPathMeta, advanced);
+                        });
                     }
+
+                    if (grid.has(childKey)) {
+                        const childNode = grid.get(childKey);
+                        childNode.dimensions = mergeDimensionStates(childNode.dimensions, childDimensions);
+                        childNode.value = evaluateEffectiveValue(childNode.dimensions, {
+                            key: childKey,
+                            parents: parentKeys,
+                            generation: generationIndex + 1,
+                            phase: 'merge',
+                        });
+                        if (!Array.isArray(childNode.parents)) childNode.parents = [];
+                        parentKeys.forEach(parentKey => {
+                            if (!childNode.parents.includes(parentKey)) childNode.parents.push(parentKey);
+                        });
+                        if (binaryEnumerationSupported && childPathMeta) {
+                            childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
+                        }
+                    } else {
+                        grid.set(childKey, {
+                            value: effectiveValue,
+                            dimensions: childDimensions,
+                            gen: generationIndex + 1,
+                            parents: parentKeys,
+                            children: [],
+                            pathMeta: binaryEnumerationSupported ? childPathMeta : null,
+                        });
+                    }
+
+                    nextFrontier.add(childKey);
+                });
+
+                frontier = nextFrontier;
+            }
+
+            if (config.backpropSteps > 0 && typeof config.backpropFn === 'function') {
+                applyBackpropagation(config.backpropSteps);
+            }
+        }
+
+        function drawGrid() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(canvas.width / 2 + view.offsetX, canvas.height / 2 + view.offsetY);
+            ctx.scale(view.scale, view.scale);
+
+            const stats = computeGridStats();
+            const nodeRadius = getNodeRadius();
+            const selectionWidth = getSelectionWidth();
+            const edgeWidth = getEdgeWidth();
+            const safeScale = Math.max(view.scale, 0.0001);
+
+            const hdrContext = { scale: view.scale };
+            const applyHDR = (input) => {
+                try {
+                    if (config.hdrFn) {
+                        const result = config.hdrFn(input, hdrContext);
+                        if (Number.isFinite(result)) return clampRatio(result);
+                    }
+                } catch (error) {
+                    console.warn('HDR logic error', error);
+                }
+                return defaultHdrFunction(input, hdrContext);
+            };
+            const colorContext = { scale: view.scale, applyHDR, clusterSize: 1, visibleStats: null, gradientRange: null };
+
+            const padding = nodeRadius + VIEW_CULL_PADDING;
+            const halfWidth = canvas.width / 2;
+            const halfHeight = canvas.height / 2;
+            const viewport = {
+                minX: (-halfWidth - view.offsetX) / safeScale - padding,
+                maxX: (halfWidth - view.offsetX) / safeScale + padding,
+                minY: (-halfHeight - view.offsetY) / safeScale - padding,
+                maxY: (halfHeight - view.offsetY) / safeScale + padding,
+            };
+
+            const shouldAggregate = view.scale < AGGREGATION_SCALE_THRESHOLD;
+            const renderEdges = !shouldAggregate && view.scale >= EDGE_RENDER_SCALE_THRESHOLD;
+            const visibleNodes = new Map();
+            const aggregatedBuckets = new Map();
+
+            const valueStatsTracker = createStatsTracker();
+            const renderStatsTracker = createStatsTracker();
+
+            const bucketWorldSize = shouldAggregate
+                ? Math.max(AGGREGATION_BUCKET_PIXELS / safeScale, nodeRadius * 2)
+                : 0;
+
+            for (const [key, node] of grid.entries()) {
+                const [x, y] = key.split(',').map(Number);
+                if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
+
+                trackStatsValue(valueStatsTracker, node.value);
+
+                if (shouldAggregate) {
+                    const bucketX = Math.round(x / bucketWorldSize);
+                    const bucketY = Math.round(y / bucketWorldSize);
+                    const bucketKey = `${bucketX},${bucketY}`;
+                    let bucket = aggregatedBuckets.get(bucketKey);
+                    if (!bucket) {
+                        bucket = { xSum: 0, ySum: 0, valueSum: 0, count: 0, maxValue: -Infinity, minValue: Infinity };
+                        aggregatedBuckets.set(bucketKey, bucket);
+                    }
+                    bucket.xSum += x;
+                    bucket.ySum += y;
+                    bucket.valueSum += node.value;
+                    bucket.count += 1;
+                    bucket.maxValue = Math.max(bucket.maxValue, node.value);
+                    bucket.minValue = Math.min(bucket.minValue, node.value);
                 } else {
-                    grid.set(childKey, {
-                        value: effectiveValue,
-                        dimensions: childDimensions,
-                        gen: generationIndex + 1,
-                        parents: parentKeys,
-                        children: [],
-                        pathMeta: binaryEnumerationSupported ? childPathMeta : null,
-                    });
-                }
-
-                nextFrontier.add(childKey);
-            });
-
-            frontier = nextFrontier;
-        }
-
-        if (config.backpropSteps > 0 && typeof config.backpropFn === 'function') {
-            applyBackpropagation(config.backpropSteps);
-        }
-    }
-
-    function drawGrid() {
-        canvas.width = canvas.offsetWidth;
-        canvas.height = canvas.offsetHeight;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.save();
-        ctx.translate(canvas.width / 2 + view.offsetX, canvas.height / 2 + view.offsetY);
-        ctx.scale(view.scale, view.scale);
-
-        const stats = computeGridStats();
-        const nodeRadius = getNodeRadius();
-        const selectionWidth = getSelectionWidth();
-        const edgeWidth = getEdgeWidth();
-        const safeScale = Math.max(view.scale, 0.0001);
-
-        const hdrContext = { scale: view.scale };
-        const applyHDR = (input) => {
-            try {
-                if (config.hdrFn) {
-                    const result = config.hdrFn(input, hdrContext);
-                    if (Number.isFinite(result)) return clampRatio(result);
-                }
-            } catch (error) {
-                console.warn('HDR logic error', error);
-            }
-            return defaultHdrFunction(input, hdrContext);
-        };
-        const colorContext = { scale: view.scale, applyHDR, clusterSize: 1, visibleStats: null, gradientRange: null };
-
-        const padding = nodeRadius + VIEW_CULL_PADDING;
-        const halfWidth = canvas.width / 2;
-        const halfHeight = canvas.height / 2;
-        const viewport = {
-            minX: (-halfWidth - view.offsetX) / safeScale - padding,
-            maxX: (halfWidth - view.offsetX) / safeScale + padding,
-            minY: (-halfHeight - view.offsetY) / safeScale - padding,
-            maxY: (halfHeight - view.offsetY) / safeScale + padding,
-        };
-
-        const shouldAggregate = view.scale < AGGREGATION_SCALE_THRESHOLD;
-        const renderEdges = !shouldAggregate && view.scale >= EDGE_RENDER_SCALE_THRESHOLD;
-        const visibleNodes = new Map();
-        const aggregatedBuckets = new Map();
-
-        const valueStatsTracker = createStatsTracker();
-        const renderStatsTracker = createStatsTracker();
-
-        const bucketWorldSize = shouldAggregate
-            ? Math.max(AGGREGATION_BUCKET_PIXELS / safeScale, nodeRadius * 2)
-            : 0;
-
-        for (const [key, node] of grid.entries()) {
-            const [x, y] = key.split(',').map(Number);
-            if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
-
-            trackStatsValue(valueStatsTracker, node.value);
-
-            if (shouldAggregate) {
-                const bucketX = Math.round(x / bucketWorldSize);
-                const bucketY = Math.round(y / bucketWorldSize);
-                const bucketKey = `${bucketX},${bucketY}`;
-                let bucket = aggregatedBuckets.get(bucketKey);
-                if (!bucket) {
-                    bucket = { xSum: 0, ySum: 0, valueSum: 0, count: 0, maxValue: -Infinity, minValue: Infinity };
-                    aggregatedBuckets.set(bucketKey, bucket);
-                }
-                bucket.xSum += x;
-                bucket.ySum += y;
-                bucket.valueSum += node.value;
-                bucket.count += 1;
-                bucket.maxValue = Math.max(bucket.maxValue, node.value);
-                bucket.minValue = Math.min(bucket.minValue, node.value);
-            } else {
-                visibleNodes.set(key, { node, x, y });
-                trackStatsValue(renderStatsTracker, node.value);
-            }
-        }
-
-        if (renderEdges && visibleNodes.size) {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-            ctx.lineWidth = edgeWidth;
-            for (const [key, entry] of visibleNodes.entries()) {
-                const { node, x: x1, y: y1 } = entry;
-                for (const parentKey of node.parents) {
-                    const parent = visibleNodes.get(parentKey);
-                    if (!parent) continue;
-                    ctx.beginPath();
-                    ctx.moveTo(parent.x, parent.y);
-                    ctx.lineTo(x1, y1);
-                    ctx.stroke();
+                    visibleNodes.set(key, { node, x, y });
+                    trackStatsValue(renderStatsTracker, node.value);
                 }
             }
-        }
 
-        let visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
-        let gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
-        colorContext.visibleStats = visibleStatsForRange;
-        colorContext.gradientRange = gradientRange;
-
-        if (shouldAggregate) {
-            resetStatsTracker(renderStatsTracker);
-            for (const bucket of aggregatedBuckets.values()) {
-                if (!bucket.count) continue;
-                const averageValue = bucket.valueSum / bucket.count;
-                const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
-                const blend = Math.min(0.7, bucket.count / 12);
-                const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
-                bucket.displayValue = displayValue;
-                trackStatsValue(renderStatsTracker, displayValue);
+            if (renderEdges && visibleNodes.size) {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+                ctx.lineWidth = edgeWidth;
+                for (const [key, entry] of visibleNodes.entries()) {
+                    const { node, x: x1, y: y1 } = entry;
+                    for (const parentKey of node.parents) {
+                        const parent = visibleNodes.get(parentKey);
+                        if (!parent) continue;
+                        ctx.beginPath();
+                        ctx.moveTo(parent.x, parent.y);
+                        ctx.lineTo(x1, y1);
+                        ctx.stroke();
+                    }
+                }
             }
-            visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
-            gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
+
+            let visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
+            let gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
             colorContext.visibleStats = visibleStatsForRange;
             colorContext.gradientRange = gradientRange;
 
-            for (const bucket of aggregatedBuckets.values()) {
-                if (!bucket.count) continue;
-                const avgX = bucket.xSum / bucket.count;
-                const avgY = bucket.ySum / bucket.count;
-                const sizeBoost = Math.min(3, Math.sqrt(bucket.count));
-                const adjustedRadius = Math.max(nodeRadius, nodeRadius * sizeBoost);
-                colorContext.clusterSize = bucket.count;
-                const displayValue = bucket.displayValue ?? (bucket.valueSum / bucket.count);
-                ctx.fillStyle = getNodeColor(displayValue, stats, gradientRange, colorContext);
-                ctx.beginPath();
-                ctx.arc(avgX, avgY, adjustedRadius, 0, 2 * Math.PI);
-                ctx.fill();
-            }
+            if (shouldAggregate) {
+                resetStatsTracker(renderStatsTracker);
+                for (const bucket of aggregatedBuckets.values()) {
+                    if (!bucket.count) continue;
+                    const averageValue = bucket.valueSum / bucket.count;
+                    const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
+                    const blend = Math.min(0.7, bucket.count / 12);
+                    const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
+                    bucket.displayValue = displayValue;
+                    trackStatsValue(renderStatsTracker, displayValue);
+                }
+                visibleStatsForRange = renderStatsTracker.count ? renderStatsTracker : valueStatsTracker;
+                gradientRange = resolveGradientRange(stats, visibleStatsForRange, view);
+                colorContext.visibleStats = visibleStatsForRange;
+                colorContext.gradientRange = gradientRange;
 
-            if (selectedNodeKey && grid.has(selectedNodeKey)) {
-                const [sx, sy] = selectedNodeKey.split(',').map(Number);
-                if (sx >= viewport.minX && sx <= viewport.maxX && sy >= viewport.minY && sy <= viewport.maxY) {
-                    const node = grid.get(selectedNodeKey);
-                    colorContext.clusterSize = 1;
+                for (const bucket of aggregatedBuckets.values()) {
+                    if (!bucket.count) continue;
+                    const avgX = bucket.xSum / bucket.count;
+                    const avgY = bucket.ySum / bucket.count;
+                    const sizeBoost = Math.min(3, Math.sqrt(bucket.count));
+                    const adjustedRadius = Math.max(nodeRadius, nodeRadius * sizeBoost);
+                    colorContext.clusterSize = bucket.count;
+                    const displayValue = bucket.displayValue ?? (bucket.valueSum / bucket.count);
+                    ctx.fillStyle = getNodeColor(displayValue, stats, gradientRange, colorContext);
+                    ctx.beginPath();
+                    ctx.arc(avgX, avgY, adjustedRadius, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+
+                if (selectedNodeKey && grid.has(selectedNodeKey)) {
+                    const [sx, sy] = selectedNodeKey.split(',').map(Number);
+                    if (sx >= viewport.minX && sx <= viewport.maxX && sy >= viewport.minY && sy <= viewport.maxY) {
+                        const node = grid.get(selectedNodeKey);
+                        colorContext.clusterSize = 1;
+                        ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
+                        ctx.beginPath();
+                        ctx.arc(sx, sy, Math.max(nodeRadius, nodeRadius * 1.25), 0, 2 * Math.PI);
+                        ctx.fill();
+                        ctx.strokeStyle = '#fff';
+                        ctx.lineWidth = selectionWidth;
+                        ctx.stroke();
+                    }
+                }
+            } else {
+                colorContext.clusterSize = 1;
+                for (const [key, entry] of visibleNodes.entries()) {
+                    const { node, x, y } = entry;
                     ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
                     ctx.beginPath();
-                    ctx.arc(sx, sy, Math.max(nodeRadius, nodeRadius * 1.25), 0, 2 * Math.PI);
+                    ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI);
                     ctx.fill();
-                    ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = selectionWidth;
-                    ctx.stroke();
+                    if (key === selectedNodeKey) {
+                        ctx.strokeStyle = '#fff';
+                        ctx.lineWidth = selectionWidth;
+                        ctx.stroke();
+                    }
                 }
             }
-        } else {
-            colorContext.clusterSize = 1;
-            for (const [key, entry] of visibleNodes.entries()) {
-                const { node, x, y } = entry;
-                ctx.fillStyle = getNodeColor(node.value, stats, gradientRange, colorContext);
-                ctx.beginPath();
-                ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI);
-                ctx.fill();
-                if (key === selectedNodeKey) {
-                    ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = selectionWidth;
-                    ctx.stroke();
-                }
+            ctx.restore();
+        }
+
+        function computeGridStats() {
+            let min = Infinity;
+            let max = -Infinity;
+            for (const node of grid.values()) {
+                min = Math.min(min, node.value);
+                max = Math.max(max, node.value);
             }
-        }
-        ctx.restore();
-    }
-
-    function computeGridStats() {
-        let min = Infinity;
-        let max = -Infinity;
-        for (const node of grid.values()) {
-            min = Math.min(min, node.value);
-            max = Math.max(max, node.value);
-        }
-        if (!grid.size) {
-            min = 0;
-            max = 0;
-        }
-        return { min, max };
-    }
-
-    function resolveGradientRange(globalStats, viewStats, viewState) {
-        const fallbackMin = (globalStats && Number.isFinite(globalStats.min)) ? globalStats.min : 0;
-        const fallbackMax = (globalStats && Number.isFinite(globalStats.max)) ? globalStats.max : 0;
-        const hasViewSamples = viewStats && Number.isFinite(viewStats.min) && Number.isFinite(viewStats.max) && viewStats.count > 0;
-
-        let blend = 0;
-        if (hasViewSamples) {
-            const countFactor = clampNumber(viewStats.count / 40, 0, 1);
-            const scaleFactor = (viewState && Number.isFinite(viewState.scale))
-                ? clampNumber(Math.log10(viewState.scale + 1) / 1.6, 0, 1)
-                : 0.2;
-            blend = clampNumber(0.2 + countFactor * 0.6 + scaleFactor * 0.2, 0, 1);
-        }
-
-        const mixValue = (viewValue, fallbackValue) => {
-            if (!hasViewSamples) return fallbackValue;
-            return viewValue * blend + fallbackValue * (1 - blend);
-        };
-
-        const padRange = (minValue, maxValue) => {
-            if (minValue === maxValue) {
-                const padding = Math.max(Math.abs(minValue) * 0.25, 0.5);
-                return { min: minValue - padding, max: maxValue + padding };
+            if (!grid.size) {
+                min = 0;
+                max = 0;
             }
-            const span = maxValue - minValue;
-            const padding = span * 0.08 || 0.5;
-            return { min: minValue - padding, max: maxValue + padding };
-        };
+            return { min, max };
+        }
 
-        switch (config.gradientMode) {
-            case 'positive': {
-                const viewMax = hasViewSamples ? Math.max(0, viewStats.max) : 0;
-                const fallbackPositive = fallbackMax > 0 ? fallbackMax : 1;
-                const resolvedMax = mixValue(Math.max(viewMax, 0), Math.max(fallbackPositive, 1));
-                return padRange(0, resolvedMax);
+        function resolveGradientRange(globalStats, viewStats, viewState) {
+            const fallbackMin = (globalStats && Number.isFinite(globalStats.min)) ? globalStats.min : 0;
+            const fallbackMax = (globalStats && Number.isFinite(globalStats.max)) ? globalStats.max : 0;
+            const hasViewSamples = viewStats && Number.isFinite(viewStats.min) && Number.isFinite(viewStats.max) && viewStats.count > 0;
+
+            let blend = 0;
+            if (hasViewSamples) {
+                const countFactor = clampNumber(viewStats.count / 40, 0, 1);
+                const scaleFactor = (viewState && Number.isFinite(viewState.scale))
+                    ? clampNumber(Math.log10(viewState.scale + 1) / 1.6, 0, 1)
+                    : 0.2;
+                blend = clampNumber(0.2 + countFactor * 0.6 + scaleFactor * 0.2, 0, 1);
             }
-            case 'negative': {
-                const viewMin = hasViewSamples ? Math.min(0, viewStats.min) : 0;
-                const fallbackNegative = fallbackMin < 0 ? fallbackMin : -1;
-                const resolvedMin = mixValue(Math.min(viewMin, 0), Math.min(fallbackNegative, -1));
-                return padRange(resolvedMin, 0);
-            }
-            case 'custom': {
-                if (!config.gradientCustom) return padRange(-1, 1);
-                let { min, max } = config.gradientCustom;
-                if (!Number.isFinite(min) || !Number.isFinite(max)) {
-                    min = fallbackMin;
-                    max = fallbackMax;
-                }
-                if (min === max) {
-                    return padRange(min, max);
-                }
-                return { min, max };
-            }
-            case 'symmetric':
-            default: {
-                const globalAbs = Math.max(Math.abs(fallbackMin), Math.abs(fallbackMax), 1);
-                const viewAbs = hasViewSamples
-                    ? Math.max(Math.abs(viewStats.min), Math.abs(viewStats.max), 0)
-                    : globalAbs;
-                const resolvedAbs = mixValue(viewAbs, globalAbs);
-                return padRange(-resolvedAbs, resolvedAbs);
-            }
-        }
-    }
 
-    function getNodeColor(value, stats, range, context) {
-        try {
-            const result = config.colorFn(value, stats, range, context);
-            if (typeof result === 'string') return result;
-        } catch (error) {
-            console.warn('Color logic error', error);
-        }
-        return defaultColorFunction(value, stats, range, context);
-    }
-    
-    function updateConfigFromUI() {
-        controls.generations.style.borderColor = '';
-        controls.moves.style.borderColor = '';
-        controls.gradientMin.style.borderColor = '';
-        controls.gradientMax.style.borderColor = '';
-        controls.backpropSteps.style.borderColor = '';
-        setEditorError('propagationPrimaryLogic', false);
-        setEditorError('propagationSecondaryLogic', false);
-        setEditorError('effectiveValueLogic', false);
-        setEditorError('backpropLogic', false);
-        setEditorError('reunificationLogic', false);
-        setEditorError('colorLogic', false);
-        setEditorError('hdrLogic', false);
-
-        const generations = parseInt(controls.generations.value, 10);
-        if (!Number.isFinite(generations) || generations < 1) {
-            controls.generations.style.borderColor = 'var(--error-color)';
-            return false;
-        }
-
-        let backpropSteps = parseInt(controls.backpropSteps.value, 10);
-        if (!Number.isFinite(backpropSteps) || backpropSteps < 0) {
-            controls.backpropSteps.style.borderColor = 'var(--error-color)';
-            return false;
-        }
-        backpropSteps = Math.min(Math.round(backpropSteps), 999);
-        controls.backpropSteps.value = backpropSteps;
-
-        let moves;
-        try {
-            moves = JSON.parse(controls.moves.value);
-        } catch (error) {
-            controls.moves.style.borderColor = 'var(--error-color)';
-            return false;
-        }
-        if (!Array.isArray(moves)) {
-            controls.moves.style.borderColor = 'var(--error-color)';
-            return false;
-        }
-
-        const sampleDimensions = {
-            primary: { value: 1, isActive: true, contributors: 1, meta: [] },
-            secondary: { value: 0, isActive: false, contributors: 0, meta: [] },
-        };
-
-        const dimensionDefinitions = [
-            { key: 'primary', id: 'propagationPrimaryLogic', defaultValue: 1, defaultActive: true },
-            { key: 'secondary', id: 'propagationSecondaryLogic', defaultValue: 0, defaultActive: false },
-        ];
-
-        const propagationDimensions = [];
-        const propagationSources = {};
-        const dimensionDefaults = {};
-
-        for (const def of dimensionDefinitions) {
-            const source = getCodeValue(def.id);
-            let fn;
-            try {
-                fn = new Function('parentValue', 'parentDimensions', 'index', 'move', 'context', `return (() => { ${source} })();`);
-                fn(
-                    1,
-                    sampleDimensions,
-                    0,
-                    Array.isArray(moves[0]) ? moves[0] : [0, 0],
-                    { generation: 0, moveIndex: 0 }
-                );
-            } catch (error) {
-                setEditorError(def.id, true);
-                return false;
-            }
-            propagationDimensions.push({
-                key: def.key,
-                source,
-                fn,
-                defaultValue: def.defaultValue,
-                defaultActive: def.defaultActive,
-            });
-            propagationSources[def.key] = source;
-            dimensionDefaults[def.key] = {
-                value: def.defaultValue,
-                isActive: def.defaultActive,
-                contributors: def.defaultActive ? 1 : 0,
+            const mixValue = (viewValue, fallbackValue) => {
+                if (!hasViewSamples) return fallbackValue;
+                return viewValue * blend + fallbackValue * (1 - blend);
             };
-        }
 
-        const gradientMode = controls.gradientMode.value;
-        let gradientCustom = null;
-        if (gradientMode === 'custom') {
-            const minVal = parseFloat(controls.gradientMin.value);
-            const maxVal = parseFloat(controls.gradientMax.value);
-            if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || minVal >= maxVal) {
-                controls.gradientMin.style.borderColor = 'var(--error-color)';
-                controls.gradientMax.style.borderColor = 'var(--error-color)';
-                return false;
+            const padRange = (minValue, maxValue) => {
+                if (minValue === maxValue) {
+                    const padding = Math.max(Math.abs(minValue) * 0.25, 0.5);
+                    return { min: minValue - padding, max: maxValue + padding };
+                }
+                const span = maxValue - minValue;
+                const padding = span * 0.08 || 0.5;
+                return { min: minValue - padding, max: maxValue + padding };
+            };
+
+            switch (config.gradientMode) {
+                case 'positive': {
+                    const viewMax = hasViewSamples ? Math.max(0, viewStats.max) : 0;
+                    const fallbackPositive = fallbackMax > 0 ? fallbackMax : 1;
+                    const resolvedMax = mixValue(Math.max(viewMax, 0), Math.max(fallbackPositive, 1));
+                    return padRange(0, resolvedMax);
+                }
+                case 'negative': {
+                    const viewMin = hasViewSamples ? Math.min(0, viewStats.min) : 0;
+                    const fallbackNegative = fallbackMin < 0 ? fallbackMin : -1;
+                    const resolvedMin = mixValue(Math.min(viewMin, 0), Math.min(fallbackNegative, -1));
+                    return padRange(resolvedMin, 0);
+                }
+                case 'custom': {
+                    if (!config.gradientCustom) return padRange(-1, 1);
+                    let { min, max } = config.gradientCustom;
+                    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+                        min = fallbackMin;
+                        max = fallbackMax;
+                    }
+                    if (min === max) {
+                        return padRange(min, max);
+                    }
+                    return { min, max };
+                }
+                case 'symmetric':
+                default: {
+                    const globalAbs = Math.max(Math.abs(fallbackMin), Math.abs(fallbackMax), 1);
+                    const viewAbs = hasViewSamples
+                        ? Math.max(Math.abs(viewStats.min), Math.abs(viewStats.max), 0)
+                        : globalAbs;
+                    const resolvedAbs = mixValue(viewAbs, globalAbs);
+                    return padRange(-resolvedAbs, resolvedAbs);
+                }
             }
-            gradientCustom = { min: minVal, max: maxVal };
         }
 
-        const colorLogicSource = getCodeValue('colorLogic');
-        let colorFn;
-        try {
-            colorFn = new Function('value', 'stats', 'range', 'context', `return (() => { ${colorLogicSource} })();`);
-            const hdrPreview = (input) => defaultHdrFunction(input, { scale: view.scale });
-            const colorTest = colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale, applyHDR: hdrPreview });
-            if (typeof colorTest !== 'string') throw new Error('Color logic must return a CSS string.');
-        } catch (error) {
-            setEditorError('colorLogic', true);
-            return false;
-        }
-
-        const hdrLogicSource = getCodeValue('hdrLogic');
-        let hdrFn;
-        try {
-            hdrFn = new Function('input', 'context', `return (() => { ${hdrLogicSource} })();`);
-            const hdrTest = hdrFn(
-                { ratio: 0.5, value: 0.5, stats: { min: 0, max: 1 }, range: { min: -1, max: 1 }, polarity: 'positive', scale: view.scale },
-                { scale: view.scale }
-            );
-            if (!Number.isFinite(hdrTest)) throw new Error('HDR logic must return a finite number.');
-        } catch (error) {
-            setEditorError('hdrLogic', true);
-            return false;
-        }
-
-        const effectiveValueSource = getCodeValue('effectiveValueLogic');
-        let effectiveValueFn;
-        try {
-            effectiveValueFn = new Function('dimensions', 'context', `return (() => { ${effectiveValueSource} })();`);
-            const effectiveTest = effectiveValueFn(sampleDimensions, { phase: 'validation', dimensionKeys: ['primary', 'secondary'] });
-            if (!Number.isFinite(effectiveTest)) throw new Error('Effective value logic must return a finite number.');
-        } catch (error) {
-            setEditorError('effectiveValueLogic', true);
-            return false;
-        }
-
-        const backpropSource = getCodeValue('backpropLogic');
-        let backpropFn;
-        try {
-            backpropFn = new Function('childState', 'parentState', 'context', `return (() => { ${backpropSource} })();`);
-            const sampleResult = backpropFn(
-                { key: 'child', value: 1, dimensions: sampleDimensions, generation: 1 },
-                { key: 'parent', value: 0.5, dimensions: sampleDimensions, generation: 0 },
-                { generation: 1, step: 0, totalSteps: Math.max(backpropSteps, 1), childKey: 'child', parentKey: 'parent' }
-            );
-            if (sampleResult !== null && sampleResult !== undefined && typeof sampleResult !== 'object') {
-                throw new Error('Backpropagation function must return an object or null.');
-            }
-        } catch (error) {
-            setEditorError('backpropLogic', true);
-            return false;
-        }
-
-        const reunificationMode = controls.reunification.value;
-        const reunificationSource = getCodeValue('reunificationLogic');
-        let reunificationFn = null;
-        if (reunificationMode === 'personalized') {
+        function getNodeColor(value, stats, range, context) {
             try {
-                reunificationFn = new Function('values', 'context', `return (() => { ${reunificationSource} })();`);
-                const sampleValues = [1, -0.5, 0.25];
-                const sampleResult = reunificationFn(sampleValues.slice(), buildReunificationContext(sampleValues));
-                if (!Number.isFinite(sampleResult)) throw new Error('Custom reunification must return a finite number.');
+                const result = config.colorFn(value, stats, range, context);
+                if (typeof result === 'string') return result;
             } catch (error) {
-                setEditorError('reunificationLogic', true);
+                console.warn('Color logic error', error);
+            }
+            return defaultColorFunction(value, stats, range, context);
+        }
+
+        function updateConfigFromUI() {
+            controls.generations.style.borderColor = '';
+            controls.moves.style.borderColor = '';
+            controls.gradientMin.style.borderColor = '';
+            controls.gradientMax.style.borderColor = '';
+            controls.backpropSteps.style.borderColor = '';
+            setEditorError('propagationPrimaryLogic', false);
+            setEditorError('propagationSecondaryLogic', false);
+            setEditorError('effectiveValueLogic', false);
+            setEditorError('backpropLogic', false);
+            setEditorError('reunificationLogic', false);
+            setEditorError('colorLogic', false);
+            setEditorError('hdrLogic', false);
+
+            const generations = parseInt(controls.generations.value, 10);
+            if (!Number.isFinite(generations) || generations < 1) {
+                controls.generations.style.borderColor = 'var(--error-color)';
                 return false;
             }
-        }
 
-        binaryEnumerationSupported = Array.isArray(moves) && moves.length === 2;
-
-        config = {
-            generations,
-            reunification: controls.reunification.value,
-            reunificationFn,
-            reunificationSource,
-            moves,
-            propagationDimensions,
-            propagationSources,
-            dimensionDefaults,
-            gradientMode,
-            gradientCustom,
-            colorFn,
-            colorLogicSource,
-            hdrFn,
-            hdrLogicSource,
-            effectiveValueFn,
-            effectiveValueSource,
-            backpropFn,
-            backpropSource,
-            backpropSteps,
-            binaryEnumerationSupported,
-        };
-        return true;
-    }
-    
-    function updateUIFromConfig() {
-        controls.generations.value = config.generations;
-        controls.reunification.value = config.reunification;
-        setCodeValue('reunificationLogic', config.reunificationSource || defaultReunificationLogicSource);
-        controls.backpropSteps.value = Number.isFinite(config.backpropSteps) ? config.backpropSteps : 0;
-        controls.moves.value = JSON.stringify(config.moves, null, 2);
-        const sources = config.propagationSources || {};
-        setCodeValue('propagationPrimaryLogic', sources.primary ?? defaultPropagationSources.primary);
-        setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
-        setCodeValue('effectiveValueLogic', config.effectiveValueSource || defaultEffectiveValueSource);
-        setCodeValue('backpropLogic', config.backpropSource || defaultBackpropLogicSource);
-        controls.gradientMode.value = config.gradientMode || 'symmetric';
-        if (controls.gradientMode.value === 'custom' && config.gradientCustom) {
-            controls.gradientMin.value = config.gradientCustom.min;
-            controls.gradientMax.value = config.gradientCustom.max;
-        }
-        setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
-        setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
-        toggleCustomGradientInputs();
-        toggleReunificationEditor();
-        binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
-        config.binaryEnumerationSupported = binaryEnumerationSupported;
-    }
-
-    function run() {
-        if (updateConfigFromUI()) {
-            generateGrid();
-            drawGrid();
-            inspectorPanel.style.display = 'none';
-            updateInspectorBinarySection(null);
-            if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
-        }
-    }
-    
-    function findNodeAt(mouseX, mouseY) {
-        const rect = canvas.getBoundingClientRect();
-        const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / view.scale;
-        const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / view.scale;
-        const aggregationMultiplier = view.scale < AGGREGATION_SCALE_THRESHOLD
-            ? Math.min(3, Math.max(1.5, AGGREGATION_SCALE_THRESHOLD / Math.max(view.scale, 0.1)))
-            : 1;
-        const hitRadius = Math.max(getNodeRadius() * aggregationMultiplier, 0.3);
-        for (const [key, node] of grid.entries()) {
-            const [nodeX, nodeY] = key.split(',').map(Number);
-            if (Math.hypot(gridX - nodeX, gridY - nodeY) < hitRadius) return key;
-        }
-        return null;
-    }
-
-    function updateInspectorPanel(nodeKey) {
-        if (!nodeKey || !grid.has(nodeKey)) {
-            inspectorPanel.style.display = 'none';
-            updateInspectorBinarySection(null);
-            return;
-        }
-        if (ENABLE_HOVER_ENUMERATION_POPUP) {
-            hideBinaryHoverPopup();
-        }
-        const node = grid.get(nodeKey);
-        if (inspectorFields.coords) inspectorFields.coords.textContent = `(${nodeKey})`;
-        if (inspectorFields.value) inspectorFields.value.textContent = node.value.toFixed(4);
-        if (inspectorFields.gen) inspectorFields.gen.textContent = node.gen;
-        renderInspectorNodeLinks(inspectorFields.parents, Array.isArray(node.parents) ? node.parents : []);
-        renderInspectorNodeLinks(inspectorFields.children, Array.isArray(node.children) ? node.children : []);
-        updateInspectorBinarySection(nodeKey);
-        inspectorPanel.style.display = 'block';
-    }
-
-    function renderInspectorNodeLinks(container, keys) {
-        if (!container) return;
-        container.innerHTML = '';
-        const uniqueKeys = Array.from(new Set((keys || []).filter(Boolean)));
-        if (!uniqueKeys.length) {
-            container.textContent = 'None';
-            return;
-        }
-        uniqueKeys.forEach(key => {
-            const link = document.createElement('span');
-            link.className = 'inspector-node-link';
-            link.dataset.nodeKey = key;
-            link.setAttribute('role', 'button');
-            link.setAttribute('tabindex', '0');
-            link.textContent = key;
-            container.appendChild(link);
-        });
-    }
-
-    function saveProject() {
-        const name = controls.projectName.value.trim();
-        if (!name) { alert('Please enter a project name.'); return; }
-        if (!updateConfigFromUI()) { alert('Please resolve configuration errors before saving.'); return; }
-        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
-        projects[name] = {
-            generations: config.generations,
-            reunification: config.reunification,
-            reunificationLogic: config.reunificationSource,
-            moves: config.moves,
-            propagationSources: config.propagationSources,
-            effectiveValueLogic: config.effectiveValueSource,
-            backpropLogic: config.backpropSource,
-            backpropSteps: config.backpropSteps,
-            gradientMode: config.gradientMode,
-            gradientCustom: config.gradientCustom,
-            colorLogic: config.colorLogicSource,
-            hdrLogic: config.hdrLogicSource,
-            version: 3,
-        };
-        localStorage.setItem('gridSimProjects', JSON.stringify(projects));
-        updateProjectList();
-    }
-
-    function loadProject() {
-        const name = controls.loadProjectSelect.value;
-        if (!name) return;
-        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
-        if (projects[name]) {
-            const proj = projects[name];
-            controls.generations.value = proj.generations;
-            controls.reunification.value = proj.reunification;
-            setCodeValue('reunificationLogic', proj.reunificationLogic || defaultReunificationLogicSource);
-            controls.moves.value = JSON.stringify(proj.moves, null, 2);
-            const sources = proj.propagationSources || {};
-            setCodeValue('propagationPrimaryLogic', sources.primary ?? proj.logic ?? defaultPropagationSources.primary);
-            setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
-            setCodeValue('effectiveValueLogic', proj.effectiveValueLogic || defaultEffectiveValueSource);
-            setCodeValue('backpropLogic', proj.backpropLogic || defaultBackpropLogicSource);
-            controls.backpropSteps.value = Number.isFinite(proj.backpropSteps) ? proj.backpropSteps : 0;
-            controls.gradientMode.value = proj.gradientMode || 'symmetric';
-            if (controls.gradientMode.value === 'custom' && proj.gradientCustom) {
-                controls.gradientMin.value = proj.gradientCustom.min;
-                controls.gradientMax.value = proj.gradientCustom.max;
+            let backpropSteps = parseInt(controls.backpropSteps.value, 10);
+            if (!Number.isFinite(backpropSteps) || backpropSteps < 0) {
+                controls.backpropSteps.style.borderColor = 'var(--error-color)';
+                return false;
             }
-            setCodeValue('colorLogic', proj.colorLogic || defaultColorLogicSource);
-            setCodeValue('hdrLogic', proj.hdrLogic || defaultHdrLogicSource);
-            controls.projectName.value = name;
+            backpropSteps = Math.min(Math.round(backpropSteps), 999);
+            controls.backpropSteps.value = backpropSteps;
+
+            let moves;
+            try {
+                moves = JSON.parse(controls.moves.value);
+            } catch (error) {
+                controls.moves.style.borderColor = 'var(--error-color)';
+                return false;
+            }
+            if (!Array.isArray(moves)) {
+                controls.moves.style.borderColor = 'var(--error-color)';
+                return false;
+            }
+
+            const sampleDimensions = {
+                primary: { value: 1, isActive: true, contributors: 1, meta: [] },
+                secondary: { value: 0, isActive: false, contributors: 0, meta: [] },
+            };
+
+            const dimensionDefinitions = [
+                { key: 'primary', id: 'propagationPrimaryLogic', defaultValue: 1, defaultActive: true },
+                { key: 'secondary', id: 'propagationSecondaryLogic', defaultValue: 0, defaultActive: false },
+            ];
+
+            const propagationDimensions = [];
+            const propagationSources = {};
+            const dimensionDefaults = {};
+
+            for (const def of dimensionDefinitions) {
+                const source = getCodeValue(def.id);
+                let fn;
+                try {
+                    fn = new Function('parentValue', 'parentDimensions', 'index', 'move', 'context', `return (() => { ${source} })();`);
+                    fn(
+                        1,
+                        sampleDimensions,
+                        0,
+                        Array.isArray(moves[0]) ? moves[0] : [0, 0],
+                        { generation: 0, moveIndex: 0 }
+                    );
+                } catch (error) {
+                    setEditorError(def.id, true);
+                    return false;
+                }
+                propagationDimensions.push({
+                    key: def.key,
+                    source,
+                    fn,
+                    defaultValue: def.defaultValue,
+                    defaultActive: def.defaultActive,
+                });
+                propagationSources[def.key] = source;
+                dimensionDefaults[def.key] = {
+                    value: def.defaultValue,
+                    isActive: def.defaultActive,
+                    contributors: def.defaultActive ? 1 : 0,
+                };
+            }
+
+            const gradientMode = controls.gradientMode.value;
+            let gradientCustom = null;
+            if (gradientMode === 'custom') {
+                const minVal = parseFloat(controls.gradientMin.value);
+                const maxVal = parseFloat(controls.gradientMax.value);
+                if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || minVal >= maxVal) {
+                    controls.gradientMin.style.borderColor = 'var(--error-color)';
+                    controls.gradientMax.style.borderColor = 'var(--error-color)';
+                    return false;
+                }
+                gradientCustom = { min: minVal, max: maxVal };
+            }
+
+            const colorLogicSource = getCodeValue('colorLogic');
+            let colorFn;
+            try {
+                colorFn = new Function('value', 'stats', 'range', 'context', `return (() => { ${colorLogicSource} })();`);
+                const hdrPreview = (input) => defaultHdrFunction(input, { scale: view.scale });
+                const colorTest = colorFn(0, { min: 0, max: 0 }, { min: 0, max: 1 }, { scale: view.scale, applyHDR: hdrPreview });
+                if (typeof colorTest !== 'string') throw new Error('Color logic must return a CSS string.');
+            } catch (error) {
+                setEditorError('colorLogic', true);
+                return false;
+            }
+
+            const hdrLogicSource = getCodeValue('hdrLogic');
+            let hdrFn;
+            try {
+                hdrFn = new Function('input', 'context', `return (() => { ${hdrLogicSource} })();`);
+                const hdrTest = hdrFn(
+                    { ratio: 0.5, value: 0.5, stats: { min: 0, max: 1 }, range: { min: -1, max: 1 }, polarity: 'positive', scale: view.scale },
+                    { scale: view.scale }
+                );
+                if (!Number.isFinite(hdrTest)) throw new Error('HDR logic must return a finite number.');
+            } catch (error) {
+                setEditorError('hdrLogic', true);
+                return false;
+            }
+
+            const effectiveValueSource = getCodeValue('effectiveValueLogic');
+            let effectiveValueFn;
+            try {
+                effectiveValueFn = new Function('dimensions', 'context', `return (() => { ${effectiveValueSource} })();`);
+                const effectiveTest = effectiveValueFn(sampleDimensions, { phase: 'validation', dimensionKeys: ['primary', 'secondary'] });
+                if (!Number.isFinite(effectiveTest)) throw new Error('Effective value logic must return a finite number.');
+            } catch (error) {
+                setEditorError('effectiveValueLogic', true);
+                return false;
+            }
+
+            const backpropSource = getCodeValue('backpropLogic');
+            let backpropFn;
+            try {
+                backpropFn = new Function('childState', 'parentState', 'context', `return (() => { ${backpropSource} })();`);
+                const sampleResult = backpropFn(
+                    { key: 'child', value: 1, dimensions: sampleDimensions, generation: 1 },
+                    { key: 'parent', value: 0.5, dimensions: sampleDimensions, generation: 0 },
+                    { generation: 1, step: 0, totalSteps: Math.max(backpropSteps, 1), childKey: 'child', parentKey: 'parent' }
+                );
+                if (sampleResult !== null && sampleResult !== undefined && typeof sampleResult !== 'object') {
+                    throw new Error('Backpropagation function must return an object or null.');
+                }
+            } catch (error) {
+                setEditorError('backpropLogic', true);
+                return false;
+            }
+
+            const reunificationMode = controls.reunification.value;
+            const reunificationSource = getCodeValue('reunificationLogic');
+            let reunificationFn = null;
+            if (reunificationMode === 'personalized') {
+                try {
+                    reunificationFn = new Function('values', 'context', `return (() => { ${reunificationSource} })();`);
+                    const sampleValues = [1, -0.5, 0.25];
+                    const sampleResult = reunificationFn(sampleValues.slice(), buildReunificationContext(sampleValues));
+                    if (!Number.isFinite(sampleResult)) throw new Error('Custom reunification must return a finite number.');
+                } catch (error) {
+                    setEditorError('reunificationLogic', true);
+                    return false;
+                }
+            }
+
+            binaryEnumerationSupported = Array.isArray(moves) && moves.length === 2;
+            app.binaryEnumerationSupported = binaryEnumerationSupported;
+
+            const nextConfig = {
+                generations,
+                reunification: controls.reunification.value,
+                reunificationFn,
+                reunificationSource,
+                moves,
+                propagationDimensions,
+                propagationSources,
+                dimensionDefaults,
+                gradientMode,
+                gradientCustom,
+                colorFn,
+                colorLogicSource,
+                hdrFn,
+                hdrLogicSource,
+                effectiveValueFn,
+                effectiveValueSource,
+                backpropFn,
+                backpropSource,
+                backpropSteps,
+                binaryEnumerationSupported,
+            };
+            config = nextConfig;
+            app.config = config;
+            return true;
+        }
+
+        function updateUIFromConfig() {
+            controls.generations.value = config.generations;
+            controls.reunification.value = config.reunification;
+            setCodeValue('reunificationLogic', config.reunificationSource || defaultReunificationLogicSource);
+            controls.backpropSteps.value = Number.isFinite(config.backpropSteps) ? config.backpropSteps : 0;
+            controls.moves.value = JSON.stringify(config.moves, null, 2);
+            const sources = config.propagationSources || {};
+            setCodeValue('propagationPrimaryLogic', sources.primary ?? defaultPropagationSources.primary);
+            setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
+            setCodeValue('effectiveValueLogic', config.effectiveValueSource || defaultEffectiveValueSource);
+            setCodeValue('backpropLogic', config.backpropSource || defaultBackpropLogicSource);
+            controls.gradientMode.value = config.gradientMode || 'symmetric';
+            if (controls.gradientMode.value === 'custom' && config.gradientCustom) {
+                controls.gradientMin.value = config.gradientCustom.min;
+                controls.gradientMax.value = config.gradientCustom.max;
+            }
+            setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
+            setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
             toggleCustomGradientInputs();
             toggleReunificationEditor();
-            scheduleRun();
+        binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
+        app.binaryEnumerationSupported = binaryEnumerationSupported;
+        config.binaryEnumerationSupported = binaryEnumerationSupported;
         }
-    }
 
-    function deleteProject() {
-        const name = controls.loadProjectSelect.value;
-        if (!name || !confirm(`Delete project "${name}"?`)) return;
-        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
-        delete projects[name];
-        localStorage.setItem('gridSimProjects', JSON.stringify(projects));
-        controls.projectName.value = "";
+        function run() {
+            if (updateConfigFromUI()) {
+                generateGrid();
+                drawGrid();
+                inspectorPanel.style.display = 'none';
+                updateInspectorBinarySection(null);
+                if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
+            }
+        }
+
+        function findNodeAt(mouseX, mouseY) {
+            const rect = canvas.getBoundingClientRect();
+            const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / view.scale;
+            const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / view.scale;
+            const aggregationMultiplier = view.scale < AGGREGATION_SCALE_THRESHOLD
+                ? Math.min(3, Math.max(1.5, AGGREGATION_SCALE_THRESHOLD / Math.max(view.scale, 0.1)))
+                : 1;
+            const hitRadius = Math.max(getNodeRadius() * aggregationMultiplier, 0.3);
+            for (const [key, node] of grid.entries()) {
+                const [nodeX, nodeY] = key.split(',').map(Number);
+                if (Math.hypot(gridX - nodeX, gridY - nodeY) < hitRadius) return key;
+            }
+            return null;
+        }
+
+        function updateInspectorPanel(nodeKey) {
+            if (!nodeKey || !grid.has(nodeKey)) {
+                inspectorPanel.style.display = 'none';
+                updateInspectorBinarySection(null);
+                return;
+            }
+            if (ENABLE_HOVER_ENUMERATION_POPUP) {
+                hideBinaryHoverPopup();
+            }
+            const node = grid.get(nodeKey);
+            if (inspectorFields.coords) inspectorFields.coords.textContent = `(${nodeKey})`;
+            if (inspectorFields.value) inspectorFields.value.textContent = node.value.toFixed(4);
+            if (inspectorFields.gen) inspectorFields.gen.textContent = node.gen;
+            renderInspectorNodeLinks(inspectorFields.parents, Array.isArray(node.parents) ? node.parents : []);
+            renderInspectorNodeLinks(inspectorFields.children, Array.isArray(node.children) ? node.children : []);
+            updateInspectorBinarySection(nodeKey);
+            inspectorPanel.style.display = 'block';
+        }
+
+        function renderInspectorNodeLinks(container, keys) {
+            if (!container) return;
+            container.innerHTML = '';
+            const uniqueKeys = Array.from(new Set((keys || []).filter(Boolean)));
+            if (!uniqueKeys.length) {
+                container.textContent = 'None';
+                return;
+            }
+            uniqueKeys.forEach(key => {
+                const link = document.createElement('span');
+                link.className = 'inspector-node-link';
+                link.dataset.nodeKey = key;
+                link.setAttribute('role', 'button');
+                link.setAttribute('tabindex', '0');
+                link.textContent = key;
+                container.appendChild(link);
+            });
+        }
+
+        function saveProject() {
+            const name = controls.projectName.value.trim();
+            if (!name) { alert('Please enter a project name.'); return; }
+            if (!updateConfigFromUI()) { alert('Please resolve configuration errors before saving.'); return; }
+            const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+            projects[name] = {
+                generations: config.generations,
+                reunification: config.reunification,
+                reunificationLogic: config.reunificationSource,
+                moves: config.moves,
+                propagationSources: config.propagationSources,
+                effectiveValueLogic: config.effectiveValueSource,
+                backpropLogic: config.backpropSource,
+                backpropSteps: config.backpropSteps,
+                gradientMode: config.gradientMode,
+                gradientCustom: config.gradientCustom,
+                colorLogic: config.colorLogicSource,
+                hdrLogic: config.hdrLogicSource,
+                version: 3,
+            };
+            localStorage.setItem('gridSimProjects', JSON.stringify(projects));
+            updateProjectList();
+        }
+
+        function loadProject() {
+            const name = controls.loadProjectSelect.value;
+            if (!name) return;
+            const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+            if (projects[name]) {
+                const proj = projects[name];
+                controls.generations.value = proj.generations;
+                controls.reunification.value = proj.reunification;
+                setCodeValue('reunificationLogic', proj.reunificationLogic || defaultReunificationLogicSource);
+                controls.moves.value = JSON.stringify(proj.moves, null, 2);
+                const sources = proj.propagationSources || {};
+                setCodeValue('propagationPrimaryLogic', sources.primary ?? proj.logic ?? defaultPropagationSources.primary);
+                setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
+                setCodeValue('effectiveValueLogic', proj.effectiveValueLogic || defaultEffectiveValueSource);
+                setCodeValue('backpropLogic', proj.backpropLogic || defaultBackpropLogicSource);
+                controls.backpropSteps.value = Number.isFinite(proj.backpropSteps) ? proj.backpropSteps : 0;
+                controls.gradientMode.value = proj.gradientMode || 'symmetric';
+                if (controls.gradientMode.value === 'custom' && proj.gradientCustom) {
+                    controls.gradientMin.value = proj.gradientCustom.min;
+                    controls.gradientMax.value = proj.gradientCustom.max;
+                }
+                setCodeValue('colorLogic', proj.colorLogic || defaultColorLogicSource);
+                setCodeValue('hdrLogic', proj.hdrLogic || defaultHdrLogicSource);
+                controls.projectName.value = name;
+                toggleCustomGradientInputs();
+                toggleReunificationEditor();
+                scheduleRunImmediate();
+            }
+        }
+
+        function deleteProject() {
+            const name = controls.loadProjectSelect.value;
+            if (!name || !confirm(`Delete project "${name}"?`)) return;
+            const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+            delete projects[name];
+            localStorage.setItem('gridSimProjects', JSON.stringify(projects));
+            controls.projectName.value = "";
+            updateProjectList();
+        }
+
+        function updateProjectList() {
+            const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
+            const currentSelection = controls.loadProjectSelect.value;
+            controls.loadProjectSelect.innerHTML = '<option value="">-- Load Project --</option>';
+            for (const name in projects) {
+                const option = document.createElement('option');
+                option.value = name; option.textContent = name;
+                controls.loadProjectSelect.appendChild(option);
+            }
+            controls.loadProjectSelect.value = currentSelection;
+        }
+
+        const presets = {
+            pascal: {
+                moves: `[[1, -1], [1, 1]]`,
+                propagation: {
+                    primary: `return parentValue;`,
+                    secondary: defaultPropagationSources.secondary,
+                },
+                effective: `const primary = dimensions.primary?.value ?? 0;\nreturn primary;`,
+                backprop: defaultBackpropLogicSource,
+                backpropSteps: 0,
+                gradientMode: 'symmetric',
+                colorLogic: defaultColorLogicSource,
+                hdrLogic: defaultHdrLogicSource,
+            },
+            divergent: {
+                moves: `[[1, -1], [1, 1]]`,
+                propagation: {
+                    primary: `const delta = index === 0 ? 0.2 : -0.3;\nreturn parentValue + delta;`,
+                    secondary: defaultPropagationSources.secondary,
+                },
+                effective: defaultEffectiveValueSource,
+                backprop: defaultBackpropLogicSource,
+                backpropSteps: 0,
+                gradientMode: 'symmetric',
+                colorLogic: defaultColorLogicSource,
+                hdrLogic: defaultHdrLogicSource,
+            },
+            backwards: {
+                moves: `[[1, -1], [1, 1], [-2, 0]]`,
+                propagation: {
+                    primary: `if (index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;`,
+                    secondary: defaultPropagationSources.secondary,
+                },
+                effective: defaultEffectiveValueSource,
+                backprop: defaultBackpropLogicSource,
+                backpropSteps: 1,
+                gradientMode: 'custom',
+                gradientCustom: { min: -2, max: 2 },
+                colorLogic: defaultColorLogicSource,
+                hdrLogic: defaultHdrLogicSource,
+            },
+            decay: {
+                moves: `[[1, -1], [1, 1]]`,
+                propagation: {
+                    primary: `return parentValue * 0.8;`,
+                    secondary: defaultPropagationSources.secondary,
+                },
+                effective: defaultEffectiveValueSource,
+                backprop: defaultBackpropLogicSource,
+                backpropSteps: 0,
+                gradientMode: 'positive',
+                colorLogic: defaultColorLogicSource,
+                hdrLogic: defaultHdrLogicSource,
+            },
+            sierpinski: {
+                moves: `[[1, -1], [1, 1]]`,
+                propagation: {
+                    primary: `const parity = Math.abs(Math.round(parentValue)) % 2;\nreturn parity;`,
+                    secondary: defaultPropagationSources.secondary,
+                },
+                effective: `return dimensions.primary?.value ?? 0;`,
+                backprop: defaultBackpropLogicSource,
+                backpropSteps: 0,
+                gradientMode: 'custom',
+                gradientCustom: { min: 0, max: 2 },
+                colorLogic: `const parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(15, 18, 30)';`,
+                hdrLogic: defaultHdrLogicSource,
+                generations: 180,
+                reunification: 'sum',
+            },
+        };
+
+        function loadPreset(preset) {
+            if (Number.isFinite(preset.generations)) {
+                controls.generations.value = preset.generations;
+            }
+            if (typeof preset.reunification === 'string') {
+                controls.reunification.value = preset.reunification;
+            }
+            setCodeValue('reunificationLogic', preset.reunificationLogic || defaultReunificationLogicSource);
+            controls.moves.value = preset.moves;
+            if (preset.propagation) {
+                setCodeValue('propagationPrimaryLogic', preset.propagation.primary ?? defaultPropagationSources.primary);
+                setCodeValue('propagationSecondaryLogic', preset.propagation.secondary ?? defaultPropagationSources.secondary);
+            }
+            setCodeValue('effectiveValueLogic', preset.effective ?? defaultEffectiveValueSource);
+            setCodeValue('backpropLogic', preset.backprop ?? defaultBackpropLogicSource);
+            controls.backpropSteps.value = Number.isFinite(preset.backpropSteps) ? preset.backpropSteps : 0;
+            controls.gradientMode.value = preset.gradientMode || 'symmetric';
+            if (controls.gradientMode.value === 'custom' && preset.gradientCustom) {
+                controls.gradientMin.value = preset.gradientCustom.min;
+                controls.gradientMax.value = preset.gradientCustom.max;
+            }
+            setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
+            setCodeValue('hdrLogic', preset.hdrLogic || defaultHdrLogicSource);
+            toggleCustomGradientInputs();
+            toggleReunificationEditor();
+            scheduleRunImmediate();
+        }
+
+        // --- Event Listeners ---
+        ['generations', 'moves', 'gradientMin', 'gradientMax', 'backpropSteps'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) element.addEventListener('input', scheduleRunImmediate);
+        });
+
+        if (controls.reunification) {
+            controls.reunification.addEventListener('change', () => {
+                toggleReunificationEditor();
+                scheduleRunImmediate();
+            });
+        }
+
+        controls.gradientMode.addEventListener('change', () => {
+            toggleCustomGradientInputs();
+            scheduleRunImmediate();
+        });
+
+        controls.saveProjectBtn.onclick = saveProject;
+        controls.loadProjectSelect.onchange = loadProject;
+        controls.deleteProjectBtn.onclick = deleteProject;
+        controls.presetPascal.onclick = () => loadPreset(presets.pascal);
+        controls.presetDivergent.onclick = () => loadPreset(presets.divergent);
+        controls.presetBackwards.onclick = () => loadPreset(presets.backwards);
+        controls.presetDecay.onclick = () => loadPreset(presets.decay);
+        controls.presetSierpinski.onclick = () => loadPreset(presets.sierpinski);
+        controls.inspectorCloseBtn.onclick = () => {
+            inspectorPanel.style.display = 'none';
+            selectedNodeKey = null;
+            app.selectedNodeKey = selectedNodeKey;
+            updateInspectorBinarySection(null);
+            drawGrid();
+        };
+        inspectorPanel.addEventListener('click', (event) => {
+            const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
+            if (!target) return;
+            const nodeKey = target.dataset.nodeKey;
+            if (!nodeKey || !grid.has(nodeKey)) return;
+            selectedNodeKey = nodeKey;
+            app.selectedNodeKey = selectedNodeKey;
+            updateInspectorPanel(nodeKey);
+            drawGrid();
+        });
+        inspectorPanel.addEventListener('keydown', (event) => {
+            if (event.defaultPrevented) return;
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            const target = event.target;
+            if (!target.classList || !target.classList.contains('inspector-node-link')) return;
+            event.preventDefault();
+            const nodeKey = target.dataset.nodeKey;
+            if (!nodeKey || !grid.has(nodeKey)) return;
+            selectedNodeKey = nodeKey;
+            app.selectedNodeKey = selectedNodeKey;
+            updateInspectorPanel(nodeKey);
+            drawGrid();
+        });
+        if (ENABLE_HOVER_ENUMERATION_POPUP) {
+            inspectorPanel.addEventListener('mouseover', handleInspectorHover);
+            inspectorPanel.addEventListener('focusin', handleInspectorFocus);
+            inspectorPanel.addEventListener('focusout', handleInspectorBlur);
+            inspectorPanel.addEventListener('mouseleave', hideBinaryHoverPopup);
+        }
+
+        canvas.addEventListener('mousedown', e => { view.isDragging = true; view.lastX = e.clientX; view.lastY = e.clientY; });
+        canvas.addEventListener('mouseup', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
+        canvas.addEventListener('mouseleave', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
+        canvas.addEventListener('mousemove', e => {
+            if (!view.isDragging) return;
+            canvas.style.cursor = 'grabbing';
+            view.offsetX += e.clientX - view.lastX;
+            view.offsetY += e.clientY - view.lastY;
+            view.lastX = e.clientX;
+            view.lastY = e.clientY;
+            drawGrid();
+        });
+        if (ENABLE_HOVER_ENUMERATION_POPUP) {
+            canvas.addEventListener('mousemove', handleCanvasBinaryHover);
+            canvas.addEventListener('mouseleave', hideBinaryHoverPopup);
+            canvas.addEventListener('mousedown', hideBinaryHoverPopup);
+        }
+        canvas.addEventListener('wheel', e => {
+            e.preventDefault();
+            const scaleAmount = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+            view.scale *= scaleAmount;
+            drawGrid();
+        });
+        canvas.addEventListener('click', e => {
+            if (Math.abs(e.clientX - view.lastX) < 3 && Math.abs(e.clientY - view.lastY) < 3) {
+                selectedNodeKey = findNodeAt(e.clientX, e.clientY);
+                app.selectedNodeKey = selectedNodeKey;
+                updateInspectorPanel(selectedNodeKey);
+                drawGrid();
+            }
+        });
+
+        app.run = run;
+        app.scheduleRunImmediate = scheduleRunImmediate;
+        app.scheduleRunDebounced = scheduleRunDebounced;
+        app.updateConfigFromUI = updateConfigFromUI;
+        app.generateGrid = generateGrid;
+        app.drawGrid = drawGrid;
+        app.getCodeValue = getCodeValue;
+        app.setCodeValue = setCodeValue;
+        app.setEditorError = setEditorError;
+        app.toggleCustomGradientInputs = toggleCustomGradientInputs;
+        app.toggleReunificationEditor = toggleReunificationEditor;
+        app.refreshActiveEditors = refreshActiveEditors;
+        app.ensureEditorExpanded = ensureEditorExpanded;
+        app.setActiveEditor = setActiveEditor;
+
+        // --- Initial Load ---
         updateProjectList();
-    }
-
-    function updateProjectList() {
-        const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
-        const currentSelection = controls.loadProjectSelect.value;
-        controls.loadProjectSelect.innerHTML = '<option value="">-- Load Project --</option>';
-        for (const name in projects) {
-            const option = document.createElement('option');
-            option.value = name; option.textContent = name;
-            controls.loadProjectSelect.appendChild(option);
-        }
-        controls.loadProjectSelect.value = currentSelection;
-    }
-    
-    const presets = {
-        pascal: {
-            moves: `[[1, -1], [1, 1]]`,
-            propagation: {
-                primary: `return parentValue;`,
-                secondary: defaultPropagationSources.secondary,
-            },
-            effective: `const primary = dimensions.primary?.value ?? 0;\nreturn primary;`,
-            backprop: defaultBackpropLogicSource,
-            backpropSteps: 0,
-            gradientMode: 'symmetric',
-            colorLogic: defaultColorLogicSource,
-            hdrLogic: defaultHdrLogicSource,
-        },
-        divergent: {
-            moves: `[[1, -1], [1, 1]]`,
-            propagation: {
-                primary: `const delta = index === 0 ? 0.2 : -0.3;\nreturn parentValue + delta;`,
-                secondary: defaultPropagationSources.secondary,
-            },
-            effective: defaultEffectiveValueSource,
-            backprop: defaultBackpropLogicSource,
-            backpropSteps: 0,
-            gradientMode: 'symmetric',
-            colorLogic: defaultColorLogicSource,
-            hdrLogic: defaultHdrLogicSource,
-        },
-        backwards: {
-            moves: `[[1, -1], [1, 1], [-2, 0]]`,
-            propagation: {
-                primary: `if (index === 2) return parentValue * 0.2;\nreturn parentValue * 0.5;`,
-                secondary: defaultPropagationSources.secondary,
-            },
-            effective: defaultEffectiveValueSource,
-            backprop: defaultBackpropLogicSource,
-            backpropSteps: 1,
-            gradientMode: 'custom',
-            gradientCustom: { min: -2, max: 2 },
-            colorLogic: defaultColorLogicSource,
-            hdrLogic: defaultHdrLogicSource,
-        },
-        decay: {
-            moves: `[[1, -1], [1, 1]]`,
-            propagation: {
-                primary: `return parentValue * 0.8;`,
-                secondary: defaultPropagationSources.secondary,
-            },
-            effective: defaultEffectiveValueSource,
-            backprop: defaultBackpropLogicSource,
-            backpropSteps: 0,
-            gradientMode: 'positive',
-            colorLogic: defaultColorLogicSource,
-            hdrLogic: defaultHdrLogicSource,
-        },
-        sierpinski: {
-            moves: `[[1, -1], [1, 1]]`,
-            propagation: {
-                primary: `const parity = Math.abs(Math.round(parentValue)) % 2;\nreturn parity;`,
-                secondary: defaultPropagationSources.secondary,
-            },
-            effective: `return dimensions.primary?.value ?? 0;`,
-            backprop: defaultBackpropLogicSource,
-            backpropSteps: 0,
-            gradientMode: 'custom',
-            gradientCustom: { min: 0, max: 2 },
-            colorLogic: `const parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(15, 18, 30)';`,
-            hdrLogic: defaultHdrLogicSource,
-            generations: 180,
-            reunification: 'sum',
-        },
-    };
-
-    function loadPreset(preset) {
-        if (Number.isFinite(preset.generations)) {
-            controls.generations.value = preset.generations;
-        }
-        if (typeof preset.reunification === 'string') {
-            controls.reunification.value = preset.reunification;
-        }
-        setCodeValue('reunificationLogic', preset.reunificationLogic || defaultReunificationLogicSource);
-        controls.moves.value = preset.moves;
-        if (preset.propagation) {
-            setCodeValue('propagationPrimaryLogic', preset.propagation.primary ?? defaultPropagationSources.primary);
-            setCodeValue('propagationSecondaryLogic', preset.propagation.secondary ?? defaultPropagationSources.secondary);
-        }
-        setCodeValue('effectiveValueLogic', preset.effective ?? defaultEffectiveValueSource);
-        setCodeValue('backpropLogic', preset.backprop ?? defaultBackpropLogicSource);
-        controls.backpropSteps.value = Number.isFinite(preset.backpropSteps) ? preset.backpropSteps : 0;
-        controls.gradientMode.value = preset.gradientMode || 'symmetric';
-        if (controls.gradientMode.value === 'custom' && preset.gradientCustom) {
-            controls.gradientMin.value = preset.gradientCustom.min;
-            controls.gradientMax.value = preset.gradientCustom.max;
-        }
-        setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
-        setCodeValue('hdrLogic', preset.hdrLogic || defaultHdrLogicSource);
         toggleCustomGradientInputs();
         toggleReunificationEditor();
-        scheduleRun();
+        run();
     }
+}
 
-    // --- Event Listeners ---
-    ['generations', 'moves', 'gradientMin', 'gradientMax', 'backpropSteps'].forEach(id => {
-        const element = document.getElementById(id);
-        if (element) element.addEventListener('input', scheduleRun);
-    });
-
-    if (controls.reunification) {
-        controls.reunification.addEventListener('change', () => {
-            toggleReunificationEditor();
-            scheduleRun();
-        });
-    }
-
-    controls.gradientMode.addEventListener('change', () => {
-        toggleCustomGradientInputs();
-        scheduleRun();
-    });
-
-    controls.saveProjectBtn.onclick = saveProject;
-    controls.loadProjectSelect.onchange = loadProject;
-    controls.deleteProjectBtn.onclick = deleteProject;
-    controls.presetPascal.onclick = () => loadPreset(presets.pascal);
-    controls.presetDivergent.onclick = () => loadPreset(presets.divergent);
-    controls.presetBackwards.onclick = () => loadPreset(presets.backwards);
-    controls.presetDecay.onclick = () => loadPreset(presets.decay);
-    controls.presetSierpinski.onclick = () => loadPreset(presets.sierpinski);
-    controls.inspectorCloseBtn.onclick = () => {
-        inspectorPanel.style.display = 'none';
-        selectedNodeKey = null;
-        updateInspectorBinarySection(null);
-        drawGrid();
-    };
-    inspectorPanel.addEventListener('click', (event) => {
-        const target = event.target instanceof Element ? event.target.closest('.inspector-node-link') : null;
-        if (!target) return;
-        const nodeKey = target.dataset.nodeKey;
-        if (!nodeKey || !grid.has(nodeKey)) return;
-        selectedNodeKey = nodeKey;
-        updateInspectorPanel(nodeKey);
-        drawGrid();
-    });
-    inspectorPanel.addEventListener('keydown', (event) => {
-        if (event.defaultPrevented) return;
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        const target = event.target;
-        if (!target.classList || !target.classList.contains('inspector-node-link')) return;
-        event.preventDefault();
-        const nodeKey = target.dataset.nodeKey;
-        if (!nodeKey || !grid.has(nodeKey)) return;
-        selectedNodeKey = nodeKey;
-        updateInspectorPanel(nodeKey);
-        drawGrid();
-    });
-    if (ENABLE_HOVER_ENUMERATION_POPUP) {
-        inspectorPanel.addEventListener('mouseover', handleInspectorHover);
-        inspectorPanel.addEventListener('focusin', handleInspectorFocus);
-        inspectorPanel.addEventListener('focusout', handleInspectorBlur);
-        inspectorPanel.addEventListener('mouseleave', hideBinaryHoverPopup);
-    }
-    
-    canvas.addEventListener('mousedown', e => { view.isDragging = true; view.lastX = e.clientX; view.lastY = e.clientY; });
-    canvas.addEventListener('mouseup', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
-    canvas.addEventListener('mouseleave', () => { view.isDragging = false; canvas.style.cursor = 'grab'; });
-    canvas.addEventListener('mousemove', e => {
-        if (!view.isDragging) return;
-        canvas.style.cursor = 'grabbing';
-        view.offsetX += e.clientX - view.lastX;
-        view.offsetY += e.clientY - view.lastY;
-        view.lastX = e.clientX;
-        view.lastY = e.clientY;
-        drawGrid();
-    });
-    if (ENABLE_HOVER_ENUMERATION_POPUP) {
-        canvas.addEventListener('mousemove', handleCanvasBinaryHover);
-        canvas.addEventListener('mouseleave', hideBinaryHoverPopup);
-        canvas.addEventListener('mousedown', hideBinaryHoverPopup);
-    }
-    canvas.addEventListener('wheel', e => {
-        e.preventDefault();
-        const scaleAmount = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-        view.scale *= scaleAmount;
-        drawGrid();
-    });
-    canvas.addEventListener('click', e => {
-        if (Math.abs(e.clientX - view.lastX) < 3 && Math.abs(e.clientY - view.lastY) < 3) {
-            selectedNodeKey = findNodeAt(e.clientX, e.clientY);
-            updateInspectorPanel(selectedNodeKey);
-            drawGrid();
-        }
-    });
-
-    // --- Initial Load ---
-    updateProjectList();
-    toggleCustomGradientInputs();
-    toggleReunificationEditor();
-    run();
+document.addEventListener('DOMContentLoaded', () => {
+    window.gridSimulatorApp = new GridSimulatorApp(document);
 });
 </script>
 
