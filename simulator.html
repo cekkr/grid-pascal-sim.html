@@ -385,6 +385,51 @@
         #customGradientInputs input {
             width: calc(50% - 5px);
         }
+        #backpropRunStatus {
+            display: none;
+            margin-top: 6px;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            background-color: rgba(255, 204, 128, 0.18);
+            color: #ffd891;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        #backpropRunStatus.visible {
+            display: block;
+        }
+        #backpropRunStatus.pending {
+            background-color: rgba(255, 204, 128, 0.24);
+            color: #ffe0a8;
+        }
+        #backpropRunStatus.applied {
+            background-color: rgba(76, 130, 247, 0.2);
+            color: var(--text-color);
+            animation: backpropFlash 1.1s ease forwards;
+        }
+        @keyframes backpropFlash {
+            0% {
+                background-color: rgba(76, 130, 247, 0.45);
+                color: #ffffff;
+            }
+            100% {
+                background-color: rgba(76, 130, 247, 0.12);
+                color: var(--primary-color);
+            }
+        }
+        .backprop-highlight {
+            animation: backpropPanePulse 1s ease;
+        }
+        @keyframes backpropPanePulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(76, 130, 247, 0.45);
+                background-color: rgba(76, 130, 247, 0.18);
+            }
+            100% {
+                box-shadow: 0 0 0 22px rgba(76, 130, 247, 0);
+                background-color: transparent;
+            }
+        }
     </style>
 </head>
 <body>
@@ -406,6 +451,7 @@
                 </select>
                 <label for="backpropSteps">Backpropagation Steps (optional)</label>
                 <input type="number" id="backpropSteps" value="0" min="0" max="50" step="1">
+                <div id="backpropRunStatus" role="status" aria-live="polite" aria-atomic="true"></div>
             </div>
 
             <div class="control-group">
@@ -709,6 +755,15 @@ class GridSimulatorApp {
             hdrLogic: document.getElementById('hdrLogic'),
         };
         this.controls = controls;
+        const backpropNotificationEl = document.getElementById('backpropRunStatus');
+        const backpropEditorPane = document.querySelector('.editor-pane[data-editor-pane="backpropLogic"]');
+        const backpropNotificationState = {
+            pending: false,
+            reason: null,
+            timeoutHandle: null,
+        };
+        this.backpropNotificationEl = backpropNotificationEl;
+        this.backpropEditorPane = backpropEditorPane;
         const controlsPanel = document.getElementById('controls');
         const editorPanel = document.getElementById('codeEditorPanel');
         const editorContent = document.getElementById('codeEditorContent');
@@ -808,6 +863,73 @@ class GridSimulatorApp {
         this.defaultReunificationLogicSource = defaultReunificationLogicSource;
         this.defaultEffectiveValueSource = defaultEffectiveValueSource;
         this.defaultBackpropLogicSource = defaultBackpropLogicSource;
+
+        function getPendingBackpropMessage(reason) {
+            switch (reason) {
+                case 'steps': return 'Waiting to apply backprop steps...';
+                case 'code': return 'Waiting to apply backprop code...';
+                case 'mixed': return 'Waiting to apply backprop changes...';
+                default: return 'Waiting to apply backprop changes...';
+            }
+        }
+
+        function getAppliedBackpropMessage(reason) {
+            switch (reason) {
+                case 'steps': return 'Backprop steps applied';
+                case 'code': return 'Backprop code applied';
+                case 'mixed': return 'Backprop changes applied';
+                default: return 'Backprop changes applied';
+            }
+        }
+
+        function clearBackpropNotificationTimer() {
+            if (!backpropNotificationState.timeoutHandle) return;
+            clearTimeout(backpropNotificationState.timeoutHandle);
+            backpropNotificationState.timeoutHandle = null;
+        }
+
+        function animateBackpropPane() {
+            if (!backpropEditorPane) return;
+            backpropEditorPane.classList.remove('backprop-highlight');
+            void backpropEditorPane.offsetWidth;
+            backpropEditorPane.classList.add('backprop-highlight');
+            setTimeout(() => backpropEditorPane.classList.remove('backprop-highlight'), 900);
+        }
+
+        function markBackpropPending(reason) {
+            clearBackpropNotificationTimer();
+            if (backpropNotificationState.pending && backpropNotificationState.reason && backpropNotificationState.reason !== reason) {
+                backpropNotificationState.reason = 'mixed';
+            } else {
+                backpropNotificationState.reason = reason;
+            }
+            backpropNotificationState.pending = true;
+            if (!backpropNotificationEl) return;
+            backpropNotificationEl.textContent = getPendingBackpropMessage(backpropNotificationState.reason);
+            backpropNotificationEl.classList.add('visible', 'pending');
+            backpropNotificationEl.classList.remove('applied');
+        }
+
+        function notifyBackpropApplied() {
+            if (!backpropNotificationState.pending) return;
+            backpropNotificationState.pending = false;
+            const reason = backpropNotificationState.reason || 'mixed';
+            backpropNotificationState.reason = null;
+            if (backpropNotificationEl) {
+                backpropNotificationEl.textContent = getAppliedBackpropMessage(reason);
+                backpropNotificationEl.classList.remove('pending');
+                backpropNotificationEl.classList.add('visible', 'applied');
+                clearBackpropNotificationTimer();
+                backpropNotificationState.timeoutHandle = setTimeout(() => {
+                    if (backpropNotificationEl) {
+                        backpropNotificationEl.classList.remove('visible', 'applied');
+                        backpropNotificationEl.textContent = '';
+                    }
+                    backpropNotificationState.timeoutHandle = null;
+                }, 1800);
+            }
+            animateBackpropPane();
+        }
 
         function refreshEditorAfterLayout(editorId) {
             const instance = codeEditors[editorId];
@@ -1488,7 +1610,12 @@ class GridSimulatorApp {
                     styleActiveLine: true,
                 });
                 applySizing(instance);
-                instance.on('change', scheduleRunDebounced);
+                instance.on('change', (cm, change) => {
+                    if (id === 'backpropLogic' && change && change.origin !== 'setValue') {
+                        markBackpropPending('code');
+                    }
+                    scheduleRunDebounced();
+                });
                 return instance;
             };
 
@@ -1510,7 +1637,14 @@ class GridSimulatorApp {
                 controls.colorLogic,
                 controls.hdrLogic,
             ].forEach(control => {
-                if (control) control.addEventListener('input', scheduleRunDebounced);
+                if (!control) return;
+                const isBackprop = control === controls.backpropLogic;
+                control.addEventListener('input', (event) => {
+                    if (isBackprop && event && event.isTrusted) {
+                        markBackpropPending('code');
+                    }
+                    scheduleRunDebounced();
+                });
             });
         }
 
@@ -1747,7 +1881,9 @@ class GridSimulatorApp {
                 const node = grid.get(nodeKey);
                 if (!node) return;
                 if (!node.dimensions) node.dimensions = createInitialDimensions();
-                if (descriptor.dimensions.size) {
+                let baseValue = Number.isFinite(node.value) ? node.value : 0;
+                const hasDimensionUpdates = descriptor.dimensions.size > 0;
+                if (hasDimensionUpdates) {
                     const deltaState = {};
                     descriptor.dimensions.forEach((delta, dimKey) => {
                         deltaState[dimKey] = {
@@ -1758,18 +1894,23 @@ class GridSimulatorApp {
                         };
                     });
                     node.dimensions = mergeDimensionStates(node.dimensions, deltaState);
+                    baseValue = evaluateEffectiveValue(node.dimensions, {
+                        key: nodeKey,
+                        generation: node.gen,
+                        phase: 'backprop',
+                        step,
+                    });
                 }
                 if (descriptor.valueOverride !== null && Number.isFinite(descriptor.valueOverride)) {
                     node.value = descriptor.valueOverride;
                 } else {
-                    node.value += descriptor.valueDelta;
+                    const delta = Number.isFinite(descriptor.valueDelta) ? descriptor.valueDelta : 0;
+                    const nextValue = baseValue + delta;
+                    node.value = Number.isFinite(nextValue) ? nextValue : baseValue;
                 }
-                node.value = evaluateEffectiveValue(node.dimensions, {
-                    key: nodeKey,
-                    generation: node.gen,
-                    phase: 'backprop',
-                    step,
-                });
+                if (!Number.isFinite(node.value)) {
+                    node.value = 0;
+                }
             });
         }
 
@@ -2433,6 +2574,7 @@ class GridSimulatorApp {
                 inspectorPanel.style.display = 'none';
                 updateInspectorBinarySection(null);
                 if (ENABLE_HOVER_ENUMERATION_POPUP) hideBinaryHoverPopup();
+                notifyBackpropApplied();
             }
         }
 
@@ -2666,10 +2808,19 @@ class GridSimulatorApp {
         }
 
         // --- Event Listeners ---
-        ['generations', 'moves', 'gradientMin', 'gradientMax', 'backpropSteps'].forEach(id => {
+        ['generations', 'moves', 'gradientMin', 'gradientMax'].forEach(id => {
             const element = document.getElementById(id);
             if (element) element.addEventListener('input', scheduleRunImmediate);
         });
+        if (controls.backpropSteps) {
+            const handleBackpropStepsInput = (event) => {
+                if (event && event.isTrusted) {
+                    markBackpropPending('steps');
+                }
+                scheduleRunDebounced();
+            };
+            controls.backpropSteps.addEventListener('input', handleBackpropStepsInput);
+        }
 
         if (controls.reunification) {
             controls.reunification.addEventListener('change', () => {
