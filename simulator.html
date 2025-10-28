@@ -683,7 +683,7 @@ return {
                     <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
                 </div>
                 <label for="xDistributionScale">X-Axis Distribution (<span id="xDistributionScaleValue">1.00x</span>)</label>
-                <input type="range" id="xDistributionScale" min="0.05" max="20" step="0.05" value="1">
+                <input type="range" id="xDistributionScale" min="0.05" max="3" step="0.05" value="1">
             </div>
             
             <div class="control-group">
@@ -2628,14 +2628,26 @@ class GridSimulatorApp {
             if (!position) return { x: 0, y: 0, depth: 0 };
             const mode = projection.mode;
 
+            ///
+            /// Everything about scaleX
+            ///
+            const viewScale = Number.isFinite(view.scale) ? view.scale : 1;
             let scaleX = Number.isFinite(config.xDistributionScale) ? config.xDistributionScale : 1;
+            scaleX = Math.pow(scaleX, 3);
 
-            let distributionRatio = config.xDistributionScale;
-            distributionRatio = distributionRatio > 1 ? 1 / distributionRatio : distributionRatio;
-            //console.log("distributionRatio", config.xDistributionScale)
+            if (viewScale !== 1 && scaleX > 0) {
+                // Exponentially adjust the effective X scale with zoom while clamping to a safe positive range.
+                const safeViewScale = Math.max(viewScale, 1e-4);
+                const distributionRatio = Math.max(Math.abs(config.xDistributionScale), 1e-4);
+                const exponent = Math.log2(distributionRatio);
+                const exponentialScale = scaleX / Math.pow(safeViewScale, exponent);
+                const minScale = 1e-4;
+                const maxScale = 1e6;
+                scaleX = clampNumber(exponentialScale, minScale, maxScale);
+            }
 
-            const scaleScaleX = scaleX * (view.scale > 1.0 ? Math.pow(1 / view.scale, view.scale) : 1 / view.scale);
-            scaleX = (scaleX * distributionRatio) + (scaleScaleX * (1.0 - distributionRatio));
+            ///
+            ///
 
             const baseX = Number.isFinite(position.x) ? position.x * scaleX : 0;
             const baseY = Number.isFinite(position.y) ? position.y : 0;
@@ -3107,7 +3119,7 @@ class GridSimulatorApp {
             let xDistributionScale = 1;
             if (controls.xDistributionScale) {
                 const raw = parseFloat(controls.xDistributionScale.value);
-                xDistributionScale = Number.isFinite(raw) ? clampNumber(raw, 0.05, 20) : 1;
+                xDistributionScale = Number.isFinite(raw) ? clampNumber(raw, 0.05, 3) : 1;
                 controls.xDistributionScale.value = xDistributionScale;
                 updateXDistributionLabel(xDistributionScale);
             }
