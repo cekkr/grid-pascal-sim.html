@@ -682,6 +682,8 @@ return {
                     <input type="number" id="gradientMin" placeholder="Min (e.g., -1)" step="0.1" value="-1">
                     <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
                 </div>
+                <label for="xDistributionScale">X-Axis Distribution (<span id="xDistributionScaleValue">1.00x</span>)</label>
+                <input type="range" id="xDistributionScale" min="0.05" max="50" step="0.05" value="1">
             </div>
             
             <div class="control-group">
@@ -957,6 +959,8 @@ class GridSimulatorApp {
             positionLogic: document.getElementById('positionLogic'),
             spaceDistortionLogic: document.getElementById('spaceDistortionLogic'),
             projectionMode: document.getElementById('projectionMode'),
+            xDistributionScale: document.getElementById('xDistributionScale'),
+            xDistributionLabel: document.getElementById('xDistributionScaleValue'),
         };
         this.controls = controls;
         const backpropNotificationEl = document.getElementById('backpropRunStatus');
@@ -999,6 +1003,13 @@ class GridSimulatorApp {
         this.MAX_SIDEBAR_WIDTH = MAX_SIDEBAR_WIDTH;
 
         const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max);
+
+        function updateXDistributionLabel(value) {
+            if (!controls.xDistributionLabel) return;
+            const numeric = Number(value);
+            const display = Number.isFinite(numeric) ? numeric : 1;
+            controls.xDistributionLabel.textContent = `${display.toFixed(2)}x`;
+        }
 
         let editorHeight = 240;
         let isEditorCollapsed = false;
@@ -1387,7 +1398,7 @@ class GridSimulatorApp {
             const ratio = accentuateRatio(hdrRatio, intensity);
             return rgbArrayToCss(sampleColorStops(negativeColorStops, ratio));
         };
-        let config = {};
+        let config = { xDistributionScale: 1 };
         let grid = new Map();
         let selectedNodeKey = null;
         let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
@@ -2616,23 +2627,27 @@ class GridSimulatorApp {
         function projectPosition(position) {
             if (!position) return { x: 0, y: 0, depth: 0 };
             const mode = projection.mode;
+            const scaleX = Number.isFinite(config.xDistributionScale) ? config.xDistributionScale : 1;
+            const baseX = Number.isFinite(position.x) ? position.x * scaleX : 0;
+            const baseY = Number.isFinite(position.y) ? position.y : 0;
+            const baseZ = Number.isFinite(position.z) ? position.z : 0;
             if (mode === 'isometric') {
                 const rotation = Number.isFinite(projection.rotation) ? projection.rotation : Math.PI / 4;
                 const tilt = Number.isFinite(projection.tilt) ? projection.tilt : Math.PI / 5;
                 const scaleZ = Number.isFinite(projection.scaleZ) ? projection.scaleZ : 0.6;
                 const cosRot = Math.cos(rotation);
                 const sinRot = Math.sin(rotation);
-                const rotatedX = position.x * cosRot - position.y * sinRot;
-                const rotatedY = position.x * sinRot + position.y * cosRot;
+                const rotatedX = baseX * cosRot - baseY * sinRot;
+                const rotatedY = baseX * sinRot + baseY * cosRot;
                 const cosTilt = Math.cos(tilt);
                 const sinTilt = Math.sin(tilt);
-                const adjustedZ = (position.z || 0) * scaleZ;
+                const adjustedZ = baseZ * scaleZ;
                 const projX = rotatedX;
                 const projY = rotatedY * cosTilt - adjustedZ * sinTilt;
                 const depth = rotatedY * sinTilt + adjustedZ * cosTilt;
                 return { x: projX, y: projY, depth };
             }
-            return { x: position.x, y: position.y, depth: position.z || 0 };
+            return { x: baseX, y: baseY, depth: baseZ };
         }
 
         function getNodeRenderPosition(node, key) {
@@ -3067,6 +3082,14 @@ class GridSimulatorApp {
                 gradientCustom = { min: minVal, max: maxVal };
             }
 
+            let xDistributionScale = 1;
+            if (controls.xDistributionScale) {
+                const raw = parseFloat(controls.xDistributionScale.value);
+                xDistributionScale = Number.isFinite(raw) ? clampNumber(raw, 0.05, 50) : 1;
+                controls.xDistributionScale.value = xDistributionScale;
+                updateXDistributionLabel(xDistributionScale);
+            }
+
             const colorLogicSource = getCodeValue('colorLogic');
             let colorFn;
             try {
@@ -3256,6 +3279,7 @@ class GridSimulatorApp {
                 backpropSteps,
                 binaryEnumerationSupported,
                 projectionMode,
+                xDistributionScale,
                 positionSource: positionSourceRaw,
                 positionFn,
                 spaceDistortionSource: spaceDistortionSourceRaw,
@@ -3302,6 +3326,11 @@ class GridSimulatorApp {
             if (controls.gradientMode.value === 'custom' && config.gradientCustom) {
                 controls.gradientMin.value = config.gradientCustom.min;
                 controls.gradientMax.value = config.gradientCustom.max;
+            }
+            if (controls.xDistributionScale) {
+                const scale = Number.isFinite(config.xDistributionScale) ? clampNumber(config.xDistributionScale, 0.25, 3) : 1;
+                controls.xDistributionScale.value = scale;
+                updateXDistributionLabel(scale);
             }
             setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
             setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
@@ -3443,7 +3472,8 @@ class GridSimulatorApp {
                 positionLogic: config.positionSource,
                 spaceDistortionLogic: config.spaceDistortionSource,
                 projectionMode: config.projectionMode,
-                version: 4,
+                xDistributionScale: config.xDistributionScale,
+                version: 5,
             };
             localStorage.setItem('gridSimProjects', JSON.stringify(projects));
             updateProjectList();
@@ -3476,6 +3506,11 @@ class GridSimulatorApp {
                 if (controls.gradientMode.value === 'custom' && proj.gradientCustom) {
                     controls.gradientMin.value = proj.gradientCustom.min;
                     controls.gradientMax.value = proj.gradientCustom.max;
+                }
+                if (controls.xDistributionScale) {
+                    const scale = Number.isFinite(proj.xDistributionScale) ? clampNumber(proj.xDistributionScale, 0.25, 3) : 1;
+                    controls.xDistributionScale.value = scale;
+                    updateXDistributionLabel(scale);
                 }
                 setCodeValue('colorLogic', proj.colorLogic || defaultColorLogicSource);
                 setCodeValue('hdrLogic', proj.hdrLogic || defaultHdrLogicSource);
@@ -3623,6 +3658,11 @@ class GridSimulatorApp {
                 controls.gradientMin.value = preset.gradientCustom.min;
                 controls.gradientMax.value = preset.gradientCustom.max;
             }
+            if (controls.xDistributionScale) {
+                const scale = Number.isFinite(preset.xDistributionScale) ? clampNumber(preset.xDistributionScale, 0.25, 3) : 1;
+                controls.xDistributionScale.value = scale;
+                updateXDistributionLabel(scale);
+            }
             setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
             setCodeValue('hdrLogic', preset.hdrLogic || defaultHdrLogicSource);
             const presetPositionLogic = typeof preset.positionLogic === 'string'
@@ -3651,10 +3691,15 @@ class GridSimulatorApp {
         }
 
         // --- Event Listeners ---
-        ['generations', 'moves', 'gradientMin', 'gradientMax'].forEach(id => {
+        ['generations', 'moves', 'gradientMin', 'gradientMax', 'xDistributionScale'].forEach(id => {
             const element = document.getElementById(id);
             if (element) element.addEventListener('input', scheduleRunImmediate);
         });
+        if (controls.xDistributionScale) {
+            controls.xDistributionScale.addEventListener('input', () => {
+                updateXDistributionLabel(controls.xDistributionScale.value);
+            });
+        }
         if (controls.backpropSteps) {
             const handleBackpropStepsInput = (event) => {
                 if (event && event.isTrusted) {
