@@ -683,7 +683,7 @@ return {
                     <input type="number" id="gradientMax" placeholder="Max (e.g., 1)" step="0.1" value="1">
                 </div>
                 <label for="xDistributionScale">X-Axis Distribution (<span id="xDistributionScaleValue">1.00x</span>)</label>
-                <input type="range" id="xDistributionScale" min="0.05" max="50" step="0.05" value="1">
+                <input type="range" id="xDistributionScale" min="0.05" max="20" step="0.05" value="1">
             </div>
             
             <div class="control-group">
@@ -2627,7 +2627,16 @@ class GridSimulatorApp {
         function projectPosition(position) {
             if (!position) return { x: 0, y: 0, depth: 0 };
             const mode = projection.mode;
-            const scaleX = Number.isFinite(config.xDistributionScale) ? config.xDistributionScale : 1;
+
+            let scaleX = Number.isFinite(config.xDistributionScale) ? config.xDistributionScale : 1;
+
+            let distributionRatio = config.xDistributionScale;
+            distributionRatio = distributionRatio > 1 ? 1 / distributionRatio : distributionRatio;
+            //console.log("distributionRatio", config.xDistributionScale)
+
+            const scaleScaleX = scaleX * (view.scale > 1.0 ? Math.pow(1 / view.scale, view.scale) : 1 / view.scale);
+            scaleX = (scaleX * distributionRatio) + (scaleScaleX * (1.0 - distributionRatio));
+
             const baseX = Number.isFinite(position.x) ? position.x * scaleX : 0;
             const baseY = Number.isFinite(position.y) ? position.y : 0;
             const baseZ = Number.isFinite(position.z) ? position.z : 0;
@@ -2760,8 +2769,13 @@ class GridSimulatorApp {
                 const cacheEntry = ensureAggregationCacheEntry(cacheKey, bucketWorldSize);
                 const buckets = cacheEntry?.buckets || new Map();
                 visibleBuckets = [];
+
+                let nodeMaxX = Infinity * -1;
                 buckets.forEach((bucket) => {
                     if (!bucket || !bucket.count) return;
+
+                    if(bucket.maxX > nodeMaxX) nodeMaxX = bucket.maxX;
+
                     if (bucket.maxX < viewport.minX || bucket.minX > viewport.maxX || bucket.maxY < viewport.minY || bucket.minY > viewport.maxY) {
                         return;
                     }
@@ -2769,16 +2783,24 @@ class GridSimulatorApp {
                     trackStatsValue(valueStatsTracker, bucket.maxValue);
                     trackStatsValue(valueStatsTracker, bucket.minValue);
                 });
+
+                view.nodeMaxX = nodeMaxX; //todo: sync it
             } else {
+                let nodeMaxX = Infinity * -1;
                 for (const [key, node] of grid.entries()) {
                     const projected = getNodeRenderPosition(node, key);
                     const { x, y, depth } = projected;
+
+                    if(x > nodeMaxX) nodeMaxX = x;
+
                     if (x < viewport.minX || x > viewport.maxX || y < viewport.minY || y > viewport.maxY) continue;
 
                     visibleNodes.set(key, { node, x, y, depth });
                     trackStatsValue(valueStatsTracker, node.value);
                     trackStatsValue(renderStatsTracker, node.value);
                 }
+
+                view.nodeMaxX = nodeMaxX;
             }
 
             if (renderEdges && visibleNodes.size) {
@@ -3085,7 +3107,7 @@ class GridSimulatorApp {
             let xDistributionScale = 1;
             if (controls.xDistributionScale) {
                 const raw = parseFloat(controls.xDistributionScale.value);
-                xDistributionScale = Number.isFinite(raw) ? clampNumber(raw, 0.05, 50) : 1;
+                xDistributionScale = Number.isFinite(raw) ? clampNumber(raw, 0.05, 20) : 1;
                 controls.xDistributionScale.value = xDistributionScale;
                 updateXDistributionLabel(xDistributionScale);
             }
@@ -3508,7 +3530,7 @@ class GridSimulatorApp {
                     controls.gradientMax.value = proj.gradientCustom.max;
                 }
                 if (controls.xDistributionScale) {
-                    const scale = Number.isFinite(proj.xDistributionScale) ? clampNumber(proj.xDistributionScale, 0.25, 3) : 1;
+                    const scale = Number.isFinite(proj.xDistributionScale) ? clampNumber(proj.xDistributionScale, 0.25, 100) : 1;
                     controls.xDistributionScale.value = scale;
                     updateXDistributionLabel(scale);
                 }
@@ -3659,7 +3681,7 @@ class GridSimulatorApp {
                 controls.gradientMax.value = preset.gradientCustom.max;
             }
             if (controls.xDistributionScale) {
-                const scale = Number.isFinite(preset.xDistributionScale) ? clampNumber(preset.xDistributionScale, 0.25, 3) : 1;
+                const scale = Number.isFinite(preset.xDistributionScale) ? clampNumber(preset.xDistributionScale, 0.25, 100) : 1;
                 controls.xDistributionScale.value = scale;
                 updateXDistributionLabel(scale);
             }
@@ -3791,10 +3813,13 @@ class GridSimulatorApp {
             canvas.addEventListener('mouseleave', hideBinaryHoverPopup);
             canvas.addEventListener('mousedown', hideBinaryHoverPopup);
         }
+
+        let generateGridScrollTimeout = null;
         canvas.addEventListener('wheel', e => {
             e.preventDefault();
             const scaleAmount = e.deltaY < 0 ? 1.05 : 1 / 1.05;
             view.scale *= scaleAmount;
+            
             drawGrid();
         });
         canvas.addEventListener('click', e => {
