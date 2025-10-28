@@ -116,10 +116,30 @@ function hydrateConfig(payload) {
     let positionFn = null;
     if (typeof safePayload.positionSource === 'string' && safePayload.positionSource.trim().length) {
         try {
-            positionFn = new Function('key', 'coords', 'context', `return (() => { ${safePayload.positionSource} })();`);
+            positionFn = new Function(
+                'key',
+                'coords',
+                'node',
+                'context',
+                `return (() => { ${safePayload.positionSource} })();`,
+            );
         } catch (error) {
             positionFn = null;
             console.warn('Position logic compilation failed in worker', error);
+        }
+    }
+
+    let spaceDistortionFn = null;
+    if (typeof safePayload.spaceDistortionSource === 'string' && safePayload.spaceDistortionSource.trim().length) {
+        try {
+            spaceDistortionFn = new Function(
+                'baseResult',
+                'context',
+                `return (() => { ${safePayload.spaceDistortionSource} })();`,
+            );
+        } catch (error) {
+            spaceDistortionFn = null;
+            console.warn('Space distortion logic compilation failed in worker', error);
         }
     }
 
@@ -141,6 +161,7 @@ function hydrateConfig(payload) {
         backpropSteps: Number.isFinite(safePayload.backpropSteps) ? safePayload.backpropSteps : 0,
         dimensionDefaults,
         positionFn,
+        spaceDistortionFn,
     };
 }
 
@@ -207,6 +228,63 @@ function createKernel(config) {
             return { value, isActive, contributors, meta };
         }
         return null;
+    }
+
+    function createNodeSnapshot(nodeKey, node) {
+        if (!node) return null;
+        return {
+            key: nodeKey,
+            value: Number.isFinite(node.value) ? node.value : 0,
+            gen: Number.isFinite(node.gen) ? node.gen : 0,
+            generation: Number.isFinite(node.gen) ? node.gen : 0,
+            parents: Array.isArray(node.parents) ? node.parents.slice() : [],
+            children: Array.isArray(node.children) ? node.children.slice() : [],
+            dimensions: cloneDimensions(node.dimensions),
+            position: node.position && typeof node.position === 'object'
+                ? {
+                    x: Number.isFinite(node.position.x) ? node.position.x : 0,
+                    y: Number.isFinite(node.position.y) ? node.position.y : 0,
+                    z: Number.isFinite(node.position.z) ? node.position.z : 0,
+                }
+                : { x: 0, y: 0, z: 0 },
+            pathMeta: node.pathMeta || null,
+        };
+    }
+
+    function applySpaceDistortion(baseResult, context, rawOutput) {
+        if (typeof config.spaceDistortionFn !== 'function') return baseResult;
+        try {
+            const result = config.spaceDistortionFn(
+                baseResult
+                    ? {
+                        value: baseResult.value,
+                        isActive: baseResult.isActive,
+                        contributors: baseResult.contributors,
+                        meta: Array.isArray(baseResult.meta) ? baseResult.meta.slice() : [],
+                    }
+                    : null,
+                {
+                    ...context,
+                    rawOutput,
+                    baseResult: baseResult
+                        ? {
+                            value: baseResult.value,
+                            isActive: baseResult.isActive,
+                            contributors: baseResult.contributors,
+                            meta: Array.isArray(baseResult.meta) ? baseResult.meta.slice() : [],
+                        }
+                        : null,
+                },
+            );
+            if (result === undefined) return baseResult;
+            if (result === null) return null;
+            if (typeof result === 'number' || typeof result === 'object') {
+                return normalizeDimensionResult(result);
+            }
+        } catch (error) {
+            console.warn('Space distortion logic error (worker)', error);
+        }
+        return baseResult;
     }
 
     function buildReunificationContext(values) {
@@ -580,14 +658,31 @@ function createKernel(config) {
         }
     }
 
-    function createPosition(key, x, y, context) {
+    function createPosition(key, x, y, node, context) {
+        const safeCoords = {
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
+            z: 0,
+        };
+        const base = { ...safeCoords };
         if (typeof config.positionFn === 'function') {
             try {
-                const custom = config.positionFn(key, { x, y }, context);
+                const enrichedContext = {
+                    ...(context || {}),
+                    key,
+                    coords: safeCoords,
+                    node,
+                };
+                const custom = config.positionFn(
+                    key,
+                    safeCoords,
+                    node,
+                    enrichedContext,
+                );
                 if (custom && typeof custom === 'object') {
                     const pos = {
-                        x: Number.isFinite(custom.x) ? Number(custom.x) : x,
-                        y: Number.isFinite(custom.y) ? Number(custom.y) : y,
+                        x: Number.isFinite(custom.x) ? Number(custom.x) : base.x,
+                        y: Number.isFinite(custom.y) ? Number(custom.y) : base.y,
                         z: Number.isFinite(custom.z) ? Number(custom.z) : 0,
                     };
                     return pos;
@@ -596,7 +691,7 @@ function createKernel(config) {
                 console.warn('Position logic error (worker)', error);
             }
         }
-        return { x, y, z: 0 };
+        return base;
     }
 
     function generateGrid() {
@@ -608,15 +703,17 @@ function createKernel(config) {
             generation: 0,
             phase: 'seed',
         });
-        grid.set(startNodeKey, {
+        const rootNode = {
             value: rootValue,
             dimensions: rootDimensions,
             gen: 0,
             parents: [],
             children: [],
             pathMeta: binaryEnumerationSupported ? createRootPathMeta() : null,
-            position: createPosition(startNodeKey, 0, 0, { generation: 0, phase: 'seed' }),
-        });
+            position: { x: 0, y: 0, z: 0 },
+        };
+        rootNode.position = createPosition(startNodeKey, 0, 0, rootNode, { generation: 0, phase: 'seed', node: rootNode });
+        grid.set(startNodeKey, rootNode);
         let frontier = new Set([startNodeKey]);
 
         for (let generationIndex = 0; generationIndex < config.generations; generationIndex += 1) {
@@ -636,6 +733,8 @@ function createKernel(config) {
                     const dimensionResults = {};
 
                     if (Array.isArray(config.propagationDimensions)) {
+                        const parentSnapshot = createNodeSnapshot(parentKey, parentNode);
+                        const childCoords = { x: childX, y: childY };
                         config.propagationDimensions.forEach((dimension) => {
                             let output = null;
                             try {
@@ -653,10 +752,23 @@ function createKernel(config) {
                                     },
                                 );
                             } catch (error) {
-                                console.warn(`Propagation "${dimension.key}" error (worker)`, error);
-                                output = null;
+                                    console.warn(`Propagation "${dimension.key}" error (worker)`, error);
+                                    output = null;
+                                }
+                            let normalizedResult = normalizeDimensionResult(output);
+                            if (normalizedResult || typeof config.spaceDistortionFn === 'function') {
+                                normalizedResult = applySpaceDistortion(normalizedResult, {
+                                    parentKey,
+                                    parentSnapshot,
+                                    childKey,
+                                    childCoords,
+                                    generation: generationIndex,
+                                    moveIndex,
+                                    move,
+                                    dimensionKey: dimension.key,
+                                }, output);
                             }
-                            dimensionResults[dimension.key] = normalizeDimensionResult(output);
+                            dimensionResults[dimension.key] = normalizedResult;
                         });
                     }
 
@@ -706,25 +818,28 @@ function createKernel(config) {
                     parentKeys.forEach((parentKey) => {
                         if (!childNode.parents.includes(parentKey)) childNode.parents.push(parentKey);
                     });
-                    if (binaryEnumerationSupported && childPathMeta) {
-                        childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
-                    }
-                } else {
-                    const [cx, cy] = childKey.split(',').map(Number);
-                    grid.set(childKey, {
-                        value: effectiveValue,
-                        dimensions: childDimensions,
-                        gen: generationIndex + 1,
-                        parents: parentKeys,
-                        children: [],
-                        pathMeta: binaryEnumerationSupported ? childPathMeta : null,
-                        position: createPosition(childKey, cx, cy, {
-                            generation: generationIndex + 1,
-                            parents: parentKeys,
-                            phase: 'forward',
-                        }),
-                    });
+                if (binaryEnumerationSupported && childPathMeta) {
+                    childNode.pathMeta = mergePathMetas(childNode.pathMeta, childPathMeta);
                 }
+            } else {
+                const [cx, cy] = childKey.split(',').map(Number);
+                const childNode = {
+                    value: effectiveValue,
+                    dimensions: childDimensions,
+                    gen: generationIndex + 1,
+                    parents: parentKeys,
+                    children: [],
+                    pathMeta: binaryEnumerationSupported ? childPathMeta : null,
+                    position: { x: cx, y: cy, z: 0 },
+                };
+                childNode.position = createPosition(childKey, cx, cy, childNode, {
+                    generation: generationIndex + 1,
+                    parents: parentKeys,
+                    phase: 'forward',
+                    node: childNode,
+                });
+                grid.set(childKey, childNode);
+            }
 
                 nextFrontier.add(childKey);
             });

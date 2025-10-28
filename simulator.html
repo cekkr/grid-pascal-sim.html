@@ -461,6 +461,16 @@
                 <textarea id="moves">[[1, -1], [1, 1]]</textarea>
             </div>
 
+            <div class="control-group">
+                <h3>Projection</h3>
+                <label for="projectionMode">Projection Mode</label>
+                <select id="projectionMode">
+                    <option value="grid" selected>Grid (planar)</option>
+                    <option value="isometric">Isometric</option>
+                    <option value="custom">Custom JS</option>
+                </select>
+            </div>
+
             <div class="control-group" id="codeEditorPanel">
                 <div class="editor-header">
                     <h3>Logic Editors</h3>
@@ -612,6 +622,46 @@ if (scale && scale < 1) {
     result *= Math.min(1.45, Math.pow(1 / Math.max(scale, 0.0001), 0.12));
 }
 return clamp01(result);</textarea>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="editor-section" data-editor-group="spatial">
+                        <div class="editor-section-header">
+                            <h4>Spatial Mapping</h4>
+                            <div class="editor-tabs">
+                                <button type="button" class="editor-tab active" data-target-editor="positionLogic">Projection</button>
+                                <button type="button" class="editor-tab" data-target-editor="spaceDistortionLogic">Space Distortion</button>
+                            </div>
+                        </div>
+                        <div class="editor-panes">
+                            <div class="editor-pane active" data-editor-pane="positionLogic">
+                                <label for="positionLogic">Position Logic Function(key, coords, node, context)</label>
+                                <textarea id="positionLogic">// Return { x, y, z? } to override node projection. context.node exposes full state snapshot.
+const nodeState = node || {};
+const generation = nodeState.gen ?? context.generation ?? 0;
+const zetaValue = nodeState.value ?? 0;
+const baseX = coords.x;
+const cluster = baseX * 0.12;
+const spread = Math.log2(generation + 2);
+return {
+    x: generation * 1.15 + cluster,
+    y: -zetaValue * 0.9,
+    z: 0,
+};</textarea>
+                            </div>
+                            <div class="editor-pane" data-editor-pane="spaceDistortionLogic">
+                                <label for="spaceDistortionLogic">Space Distortion Function(baseResult, context)</label>
+                                <textarea id="spaceDistortionLogic">// baseResult is the normalized dimension payload { value, isActive, contributors, meta? }.
+// Return null to drop the contribution, a number/object to replace it, or undefined to keep it.
+if (!baseResult) return null;
+const { childCoords, generation, dimensionKey } = context;
+const radius = Math.hypot(childCoords.x, childCoords.y);
+const oscillation = Math.sin(radius * 0.06 + generation * 0.08);
+const scaling = 1 + oscillation * (dimensionKey === 'primary' ? 0.35 : 0.15);
+return {
+    ...baseResult,
+    value: baseResult.value * scaling,
+};</textarea>
                             </div>
                         </div>
                     </section>
@@ -904,6 +954,9 @@ class GridSimulatorApp {
             gradientMax: document.getElementById('gradientMax'),
             colorLogic: document.getElementById('colorLogic'),
             hdrLogic: document.getElementById('hdrLogic'),
+            positionLogic: document.getElementById('positionLogic'),
+            spaceDistortionLogic: document.getElementById('spaceDistortionLogic'),
+            projectionMode: document.getElementById('projectionMode'),
         };
         this.controls = controls;
         const backpropNotificationEl = document.getElementById('backpropRunStatus');
@@ -995,9 +1048,11 @@ class GridSimulatorApp {
 
         const customGradientInputs = document.getElementById('customGradientInputs');
         const reunificationEditorSection = document.getElementById('reunificationEditorSection');
+        const spatialEditorSection = document.querySelector('.editor-section[data-editor-group="spatial"]');
         const codeEditors = {};
         this.customGradientInputs = customGradientInputs;
         this.reunificationEditorSection = reunificationEditorSection;
+        this.spatialEditorSection = spatialEditorSection;
         this.codeEditors = codeEditors;
         const defaultColorLogicSource = controls.colorLogic.value;
         const defaultHdrLogicSource = controls.hdrLogic.value;
@@ -1005,12 +1060,18 @@ class GridSimulatorApp {
             primary: controls.propagationPrimary ? controls.propagationPrimary.value : '',
             secondary: controls.propagationSecondary ? controls.propagationSecondary.value : '',
         };
+        const defaultPositionLogicSource = controls.positionLogic ? controls.positionLogic.value : '';
+        const defaultSpaceDistortionSource = controls.spaceDistortionLogic ? controls.spaceDistortionLogic.value : '';
+        const defaultProjectionMode = controls.projectionMode ? controls.projectionMode.value : 'grid';
         const defaultReunificationLogicSource = controls.reunificationLogic ? controls.reunificationLogic.value : '';
         const defaultEffectiveValueSource = controls.effectiveValueLogic ? controls.effectiveValueLogic.value : '';
         const defaultBackpropLogicSource = controls.backpropLogic ? controls.backpropLogic.value : '';
         this.defaultColorLogicSource = defaultColorLogicSource;
         this.defaultHdrLogicSource = defaultHdrLogicSource;
         this.defaultPropagationSources = defaultPropagationSources;
+        this.defaultPositionLogicSource = defaultPositionLogicSource;
+        this.defaultSpaceDistortionSource = defaultSpaceDistortionSource;
+        this.defaultProjectionMode = defaultProjectionMode;
         this.defaultReunificationLogicSource = defaultReunificationLogicSource;
         this.defaultEffectiveValueSource = defaultEffectiveValueSource;
         this.defaultBackpropLogicSource = defaultBackpropLogicSource;
@@ -1421,6 +1482,12 @@ class GridSimulatorApp {
             }
         }
 
+        function toggleSpatialEditors() {
+            if (!spatialEditorSection) return;
+            const mode = controls.projectionMode ? controls.projectionMode.value : 'grid';
+            spatialEditorSection.style.display = mode === 'custom' ? '' : 'none';
+        }
+
         function createRootPathMeta() {
             return {
                 depth: 0,
@@ -1517,7 +1584,19 @@ class GridSimulatorApp {
         function computeNodePositionOverride(key, coords, context = {}) {
             if (typeof config.positionFn !== 'function') return null;
             try {
-                const result = config.positionFn(key, coords, context);
+                const safeCoords = {
+                    x: Number.isFinite(coords?.x) ? coords.x : 0,
+                    y: Number.isFinite(coords?.y) ? coords.y : 0,
+                    z: Number.isFinite(coords?.z) ? coords.z : 0,
+                };
+                const nodeContext = context && context.node ? context.node : null;
+                const enrichedContext = {
+                    ...(context || {}),
+                    key,
+                    coords: safeCoords,
+                    node: nodeContext,
+                };
+                const result = config.positionFn(key, safeCoords, nodeContext, enrichedContext);
                 if (result && typeof result === 'object') {
                     const x = Number(result.x);
                     const y = Number(result.y);
@@ -1814,6 +1893,8 @@ class GridSimulatorApp {
             codeEditors.reunificationLogic = createEditor('reunificationLogic', controls.reunificationLogic);
             codeEditors.colorLogic = createEditor('colorLogic', controls.colorLogic);
             codeEditors.hdrLogic = createEditor('hdrLogic', controls.hdrLogic);
+            codeEditors.positionLogic = createEditor('positionLogic', controls.positionLogic);
+            codeEditors.spaceDistortionLogic = createEditor('spaceDistortionLogic', controls.spaceDistortionLogic);
             refreshActiveEditors();
         } else {
             [
@@ -1824,6 +1905,8 @@ class GridSimulatorApp {
                 controls.reunificationLogic,
                 controls.colorLogic,
                 controls.hdrLogic,
+                controls.positionLogic,
+                controls.spaceDistortionLogic,
             ].forEach(control => {
                 if (!control) return;
                 const isBackprop = control === controls.backpropLogic;
@@ -1896,6 +1979,59 @@ class GridSimulatorApp {
                 return { value, isActive, contributors, meta };
             }
             return null;
+        }
+
+        function createNodeSnapshot(nodeKey, node) {
+            if (!node) return null;
+            return {
+                key: nodeKey,
+                value: Number.isFinite(node.value) ? node.value : 0,
+                generation: Number.isFinite(node.gen) ? node.gen : 0,
+                gen: Number.isFinite(node.gen) ? node.gen : 0,
+                parents: Array.isArray(node.parents) ? node.parents.slice() : [],
+                children: Array.isArray(node.children) ? node.children.slice() : [],
+                dimensions: cloneDimensions(node.dimensions),
+                position: node.position && typeof node.position === 'object'
+                    ? {
+                        x: Number.isFinite(node.position.x) ? node.position.x : 0,
+                        y: Number.isFinite(node.position.y) ? node.position.y : 0,
+                        z: Number.isFinite(node.position.z) ? node.position.z : 0,
+                    }
+                    : { x: 0, y: 0, z: 0 },
+                pathMeta: node.pathMeta || null,
+            };
+        }
+
+        function applySpaceDistortion(baseResult, context, rawOutput) {
+            if (typeof config.spaceDistortionFn !== 'function') return baseResult;
+            try {
+                const result = config.spaceDistortionFn(
+                    baseResult ? {
+                        value: baseResult.value,
+                        isActive: baseResult.isActive,
+                        contributors: baseResult.contributors,
+                        meta: Array.isArray(baseResult.meta) ? baseResult.meta.slice() : [],
+                    } : null,
+                    {
+                        ...context,
+                        rawOutput,
+                        baseResult: baseResult ? {
+                            value: baseResult.value,
+                            isActive: baseResult.isActive,
+                            contributors: baseResult.contributors,
+                            meta: Array.isArray(baseResult.meta) ? baseResult.meta.slice() : [],
+                        } : null,
+                    }
+                );
+                if (result === undefined) return baseResult;
+                if (result === null) return null;
+                if (typeof result === 'number' || typeof result === 'object') {
+                    return normalizeDimensionResult(result);
+                }
+            } catch (error) {
+                console.warn('Space distortion logic error', error);
+            }
+            return baseResult;
         }
 
         function buildReunificationContext(values) {
@@ -2162,19 +2298,29 @@ class GridSimulatorApp {
                 phase: 'seed',
             });
             const rootBaseCoords = { x: 0, y: 0, z: 0 };
-            const rootPositionOverride = computeNodePositionOverride(startNodeKey, rootBaseCoords, {
-                generation: 0,
-                phase: 'seed',
-            });
-            grid.set(startNodeKey, {
+            const rootNode = {
                 value: rootValue,
                 dimensions: rootDimensions,
                 gen: 0,
                 parents: [],
                 children: [],
                 pathMeta: binaryEnumerationSupported ? createRootPathMeta() : null,
-                position: rootPositionOverride || rootBaseCoords,
+                position: rootBaseCoords,
+            };
+            const rootSnapshot = { ...rootNode, key: startNodeKey };
+            const rootPositionOverride = computeNodePositionOverride(startNodeKey, rootBaseCoords, {
+                generation: 0,
+                phase: 'seed',
+                node: rootSnapshot,
             });
+            if (rootPositionOverride && typeof rootPositionOverride === 'object') {
+                rootNode.position = {
+                    x: Number.isFinite(rootPositionOverride.x) ? Number(rootPositionOverride.x) : rootBaseCoords.x,
+                    y: Number.isFinite(rootPositionOverride.y) ? Number(rootPositionOverride.y) : rootBaseCoords.y,
+                    z: Number.isFinite(rootPositionOverride.z) ? Number(rootPositionOverride.z) : 0,
+                };
+            }
+            grid.set(startNodeKey, rootNode);
             let frontier = new Set([startNodeKey]);
 
             for (let generationIndex = 0; generationIndex < config.generations; generationIndex++) {
@@ -2194,6 +2340,8 @@ class GridSimulatorApp {
                         const dimensionResults = {};
 
                         if (Array.isArray(config.propagationDimensions)) {
+                            const parentSnapshot = createNodeSnapshot(parentKey, parentNode);
+                            const childCoords = { x: childX, y: childY };
                             config.propagationDimensions.forEach(dimension => {
                                 let output = null;
                                 try {
@@ -2214,7 +2362,20 @@ class GridSimulatorApp {
                                     console.warn(`Propagation "${dimension.key}" error`, error);
                                     output = null;
                                 }
-                                dimensionResults[dimension.key] = normalizeDimensionResult(output);
+                                let normalizedResult = normalizeDimensionResult(output);
+                                if (normalizedResult || typeof config.spaceDistortionFn === 'function') {
+                                    normalizedResult = applySpaceDistortion(normalizedResult, {
+                                        parentKey,
+                                        parentSnapshot,
+                                        childKey,
+                                        childCoords,
+                                        generation: generationIndex,
+                                        moveIndex,
+                                        move,
+                                        dimensionKey: dimension.key,
+                                    }, output);
+                                }
+                                dimensionResults[dimension.key] = normalizedResult;
                             });
                         }
 
@@ -2272,20 +2433,30 @@ class GridSimulatorApp {
                         const childX = parseInt(splKey[0]);
                         const childY = parseInt(splKey[1]);
                         const baseCoords = { x: childX, y: childY, z: 0 };
-                        const customPosition = computeNodePositionOverride(childKey, baseCoords, {
-                            generation: generationIndex + 1,
-                            parents: parentKeys,
-                            phase: 'forward',
-                        });
-                        grid.set(childKey, {
+                        const childNode = {
                             value: effectiveValue,
                             dimensions: childDimensions,
                             gen: generationIndex + 1,
                             parents: parentKeys,
                             children: [],
                             pathMeta: binaryEnumerationSupported ? childPathMeta : null,
-                            position: customPosition || baseCoords,
+                            position: baseCoords,
+                        };
+                        const childSnapshot = { ...childNode, key: childKey };
+                        const customPosition = computeNodePositionOverride(childKey, baseCoords, {
+                            generation: generationIndex + 1,
+                            parents: parentKeys,
+                            phase: 'forward',
+                            node: childSnapshot,
                         });
+                        if (customPosition && typeof customPosition === 'object') {
+                            childNode.position = {
+                                x: Number.isFinite(customPosition.x) ? Number(customPosition.x) : baseCoords.x,
+                                y: Number.isFinite(customPosition.y) ? Number(customPosition.y) : baseCoords.y,
+                                z: Number.isFinite(customPosition.z) ? Number(customPosition.z) : 0,
+                            };
+                        }
+                        grid.set(childKey, childNode);
                     }
 
                     nextFrontier.add(childKey);
@@ -2362,10 +2533,23 @@ class GridSimulatorApp {
             let compiled = null;
             if (nextSource) {
                 try {
-                    compiled = new Function('key', 'coords', 'context', `return (() => { ${nextSource} })();`);
-                    const probe = compiled('0,0', { x: 0, y: 0, z: 0 }, { generation: 0, phase: 'probe' });
+                    compiled = new Function('key', 'coords', 'node', 'context', `return (() => { ${nextSource} })();`);
+                    const sampleNode = {
+                        key: '0,0',
+                        value: 0,
+                        gen: 0,
+                        parents: [],
+                        children: [],
+                        dimensions: {},
+                        position: { x: 0, y: 0, z: 0 },
+                    };
+                    const probe = compiled('0,0', { x: 0, y: 0, z: 0 }, sampleNode, { generation: 0, phase: 'probe', node: sampleNode });
                     if (probe && typeof probe === 'object') {
-                        // Validate numbers if provided; fall through otherwise.
+                        if ((probe.x !== undefined && !Number.isFinite(Number(probe.x)))
+                            || (probe.y !== undefined && !Number.isFinite(Number(probe.y)))
+                            || (probe.z !== undefined && !Number.isFinite(Number(probe.z)))) {
+                            throw new Error('Position logic must return finite coordinates.');
+                        }
                     }
                 } catch (error) {
                     console.warn('Failed to compile position logic', error);
@@ -2374,9 +2558,17 @@ class GridSimulatorApp {
             }
 
             config.positionSource = nextSource;
-            config.positionFn = compiled;
+            config.positionFn = nextSource && nextSource.trim() ? compiled : null;
+            if (controls.projectionMode && nextSource && nextSource.trim()) {
+                controls.projectionMode.value = 'custom';
+                toggleSpatialEditors();
+            }
+            if (nextSource && nextSource.trim()) {
+                config.projectionMode = 'custom';
+            }
+            setCodeValue('positionLogic', nextSource);
             if (config.workerPayload) {
-                config.workerPayload.positionSource = nextSource;
+                config.workerPayload.positionSource = config.projectionMode === 'custom' ? nextSource : '';
             }
             resetViewCaches();
             if (autoRun) {
@@ -2788,6 +2980,8 @@ class GridSimulatorApp {
             setEditorError('reunificationLogic', false);
             setEditorError('colorLogic', false);
             setEditorError('hdrLogic', false);
+            setEditorError('positionLogic', false);
+            setEditorError('spaceDistortionLogic', false);
 
             const generations = parseInt(controls.generations.value, 10);
             if (!Number.isFinite(generations) || generations < 1) {
@@ -2945,8 +3139,100 @@ class GridSimulatorApp {
             binaryEnumerationSupported = Array.isArray(moves) && moves.length === 2;
             app.binaryEnumerationSupported = binaryEnumerationSupported;
 
-            const positionSource = typeof config.positionSource === 'string' ? config.positionSource : '';
-            const positionFn = typeof config.positionFn === 'function' ? config.positionFn : null;
+            const sampleNodeDimensions = {};
+            propagationDimensions.forEach(dimension => {
+                sampleNodeDimensions[dimension.key] = {
+                    value: dimension.defaultValue,
+                    isActive: dimension.defaultActive,
+                    contributors: dimension.defaultActive ? 1 : 0,
+                    meta: [],
+                };
+            });
+            const projectionMode = controls.projectionMode ? controls.projectionMode.value : 'grid';
+            const positionSourceRaw = getCodeValue('positionLogic');
+            const spaceDistortionSourceRaw = getCodeValue('spaceDistortionLogic');
+            let positionFn = null;
+            let spaceDistortionFn = null;
+            let workerPositionSource = '';
+            let workerSpaceDistortionSource = '';
+
+            if (projectionMode === 'custom') {
+                if (positionSourceRaw && positionSourceRaw.trim()) {
+                    try {
+                        positionFn = new Function('key', 'coords', 'node', 'context', `return (() => { ${positionSourceRaw} })();`);
+                        const sampleNode = {
+                            key: '0,0',
+                            value: 0,
+                            gen: 0,
+                            parents: [],
+                            children: [],
+                            dimensions: sampleNodeDimensions,
+                            position: { x: 0, y: 0, z: 0 },
+                        };
+                        const probe = positionFn(
+                            '0,0',
+                            { x: 0, y: 0, z: 0 },
+                            sampleNode,
+                            { generation: 0, phase: 'probe', node: sampleNode }
+                        );
+                        if (probe && typeof probe === 'object') {
+                            if ((probe.x !== undefined && !Number.isFinite(Number(probe.x)))
+                                || (probe.y !== undefined && !Number.isFinite(Number(probe.y)))
+                                || (probe.z !== undefined && !Number.isFinite(Number(probe.z)))) {
+                                throw new Error('Position logic must return finite coordinates.');
+                            }
+                        }
+                    } catch (error) {
+                        setEditorError('positionLogic', true);
+                        return false;
+                    }
+                }
+
+                if (spaceDistortionSourceRaw && spaceDistortionSourceRaw.trim()) {
+                    try {
+                        spaceDistortionFn = new Function('baseResult', 'context', `return (() => { ${spaceDistortionSourceRaw} })();`);
+                        const sampleContext = {
+                            parentKey: '0,0',
+                            parentSnapshot: {
+                                key: '0,0',
+                                value: 1,
+                                generation: 0,
+                                position: { x: 0, y: 0, z: 0 },
+                                dimensions: sampleNodeDimensions,
+                            },
+                            childKey: '1,0',
+                            childCoords: { x: 1, y: 0 },
+                            generation: 0,
+                            moveIndex: 0,
+                            move: [1, 0],
+                            dimensionKey: 'primary',
+                            rawOutput: { value: 1 },
+                        };
+                        const preview = spaceDistortionFn(
+                            { value: 1, isActive: true, contributors: 1, meta: [] },
+                            sampleContext
+                        );
+                        if (preview !== undefined && preview !== null) {
+                            const normalizedPreview = normalizeDimensionResult(preview);
+                            if (!normalizedPreview) {
+                                throw new Error('Space distortion must return a finite dimension descriptor.');
+                            }
+                        }
+                    } catch (error) {
+                        setEditorError('spaceDistortionLogic', true);
+                        return false;
+                    }
+                }
+
+                workerPositionSource = positionSourceRaw;
+                workerSpaceDistortionSource = spaceDistortionSourceRaw;
+            } else {
+                workerPositionSource = '';
+                workerSpaceDistortionSource = '';
+            }
+
+            const projectionTargetMode = projectionMode === 'isometric' ? 'isometric' : 'planar';
+            setProjectionMode(projectionTargetMode);
 
             const nextConfig = {
                 generations,
@@ -2969,8 +3255,11 @@ class GridSimulatorApp {
                 backpropSource,
                 backpropSteps,
                 binaryEnumerationSupported,
-                positionSource,
+                projectionMode,
+                positionSource: positionSourceRaw,
                 positionFn,
+                spaceDistortionSource: spaceDistortionSourceRaw,
+                spaceDistortionFn,
             };
             nextConfig.workerPayload = {
                 generations,
@@ -2990,7 +3279,8 @@ class GridSimulatorApp {
                 backpropSteps,
                 binaryEnumerationSupported,
                 dimensionDefaults,
-                positionSource,
+                positionSource: workerPositionSource,
+                spaceDistortionSource: workerSpaceDistortionSource,
             };
             config = nextConfig;
             app.config = config;
@@ -3015,8 +3305,18 @@ class GridSimulatorApp {
             }
             setCodeValue('colorLogic', config.colorLogicSource || defaultColorLogicSource);
             setCodeValue('hdrLogic', config.hdrLogicSource || defaultHdrLogicSource);
+            setCodeValue('positionLogic', config.positionSource || defaultPositionLogicSource);
+            setCodeValue('spaceDistortionLogic', config.spaceDistortionSource || defaultSpaceDistortionSource);
+            if (controls.projectionMode) {
+                const availableModes = ['grid', 'isometric', 'custom'];
+                const resolvedMode = config.projectionMode && availableModes.includes(config.projectionMode)
+                    ? config.projectionMode
+                    : (config.positionSource ? 'custom' : defaultProjectionMode || 'grid');
+                controls.projectionMode.value = resolvedMode;
+            }
             toggleCustomGradientInputs();
             toggleReunificationEditor();
+            toggleSpatialEditors();
             binaryEnumerationSupported = Array.isArray(config.moves) && config.moves.length === 2;
             app.binaryEnumerationSupported = binaryEnumerationSupported;
             config.binaryEnumerationSupported = binaryEnumerationSupported;
@@ -3140,7 +3440,10 @@ class GridSimulatorApp {
                 gradientCustom: config.gradientCustom,
                 colorLogic: config.colorLogicSource,
                 hdrLogic: config.hdrLogicSource,
-                version: 3,
+                positionLogic: config.positionSource,
+                spaceDistortionLogic: config.spaceDistortionSource,
+                projectionMode: config.projectionMode,
+                version: 4,
             };
             localStorage.setItem('gridSimProjects', JSON.stringify(projects));
             updateProjectList();
@@ -3152,6 +3455,13 @@ class GridSimulatorApp {
             const projects = JSON.parse(localStorage.getItem('gridSimProjects') || '{}');
             if (projects[name]) {
                 const proj = projects[name];
+                if (controls.projectionMode) {
+                    const availableModes = ['grid', 'isometric', 'custom'];
+                    const loadedMode = proj.projectionMode && availableModes.includes(proj.projectionMode)
+                        ? proj.projectionMode
+                        : (proj.positionLogic ? 'custom' : 'grid');
+                    controls.projectionMode.value = loadedMode;
+                }
                 controls.generations.value = proj.generations;
                 controls.reunification.value = proj.reunification;
                 setCodeValue('reunificationLogic', proj.reunificationLogic || defaultReunificationLogicSource);
@@ -3169,9 +3479,12 @@ class GridSimulatorApp {
                 }
                 setCodeValue('colorLogic', proj.colorLogic || defaultColorLogicSource);
                 setCodeValue('hdrLogic', proj.hdrLogic || defaultHdrLogicSource);
+                setCodeValue('positionLogic', proj.positionLogic || defaultPositionLogicSource);
+                setCodeValue('spaceDistortionLogic', proj.spaceDistortionLogic || defaultSpaceDistortionSource);
                 controls.projectName.value = name;
                 toggleCustomGradientInputs();
                 toggleReunificationEditor();
+                toggleSpatialEditors();
                 scheduleRunImmediate();
             }
         }
@@ -3280,6 +3593,9 @@ class GridSimulatorApp {
                 gradientMode: 'custom',
                 gradientCustom: { min: -10, max: 10 },
                 colorLogic: `const amplitude = Math.abs(value);\nconst span = Math.max(Math.abs(range.max), Math.abs(range.min), 1);\nconst normalized = Math.min(1, amplitude / span);\nconst hue = value >= 0 ? 190 - normalized * 60 : 320 + normalized * 25;\nconst saturation = 58 + normalized * 30;\nconst lightness = value >= 0 ? 24 + normalized * 42 : 46 - normalized * 20;\nreturn 'hsl(' + Math.round(hue) + ', ' + Math.round(saturation) + '%, ' + Math.round(lightness) + '%)';`,
+                projectionMode: 'custom',
+                positionLogic: `const snapshot = node || context?.node || null;\nconst generation = snapshot?.gen ?? context.generation ?? 0;\nconst coords = (key || '0,0').split(',');\nconst dx = Number(coords[0]) || 0;\nconst dy = Number(coords[1]) || 0;\nconst harmonic = snapshot?.dimensions?.primary?.value ?? 0;\nconst zetaValue = snapshot?.value ?? 0;\nconst radial = Math.log1p(Math.abs(dx) + Math.abs(dy));\nconst skew = (dx - dy) * 0.04;\nconst spiral = radial * 0.18;\nconst x = generation * 1.12 + skew + spiral * Math.cos(generation * 0.08);\nconst y = -zetaValue * 0.88 + harmonic * 0.12 + spiral * Math.sin(generation * 0.06);\nconst depth = (snapshot?.pathMeta?.depth ?? generation) > 0 ? zetaValue * 0.06 : 0;\nreturn { x, y, z: depth };`,
+                spaceDistortionLogic: `if (!baseResult) return null;\nconst { parentSnapshot, childCoords, generation, dimensionKey } = context;\nconst parentValue = parentSnapshot?.value ?? 0;\nconst radius = Math.hypot(childCoords.x, childCoords.y);\nconst wave = Math.sin(radius * 0.045 + generation * 0.12);\nconst envelope = 1 + Math.log1p(radius) * 0.18;\nconst polarity = parentValue >= 0 ? 1.08 : 0.9;\nconst channelBias = dimensionKey === 'primary' ? 1.0 : 0.45;\nconst multiplier = (1 + wave * 0.3 * channelBias) * envelope * polarity;\nconst meta = Array.isArray(baseResult.meta) ? baseResult.meta.slice() : [];\nmeta.push({ distortion: multiplier, radius, wave });\nreturn { ...baseResult, value: baseResult.value * multiplier, meta };`,
                 hdrLogic: defaultHdrLogicSource,
                 generations: 192,
                 reunification: 'sum',
@@ -3309,8 +3625,28 @@ class GridSimulatorApp {
             }
             setCodeValue('colorLogic', preset.colorLogic || defaultColorLogicSource);
             setCodeValue('hdrLogic', preset.hdrLogic || defaultHdrLogicSource);
+            const presetPositionLogic = typeof preset.positionLogic === 'string'
+                ? preset.positionLogic
+                : (preset.position && typeof preset.position.logic === 'string' ? preset.position.logic : null);
+            const presetSpaceDistortionLogic = typeof preset.spaceDistortionLogic === 'string'
+                ? preset.spaceDistortionLogic
+                : (preset.spaceDistortion && typeof preset.spaceDistortion.logic === 'string' ? preset.spaceDistortion.logic : null);
+            setCodeValue('positionLogic', presetPositionLogic ?? defaultPositionLogicSource);
+            setCodeValue('spaceDistortionLogic', presetSpaceDistortionLogic ?? defaultSpaceDistortionSource);
+            if (controls.projectionMode) {
+                const availableModes = ['grid', 'isometric', 'custom'];
+                let mode = preset.projectionMode || preset.positionMode;
+                if (!mode) {
+                    mode = presetPositionLogic ? 'custom' : 'grid';
+                }
+                if (!availableModes.includes(mode)) {
+                    mode = 'grid';
+                }
+                controls.projectionMode.value = mode;
+            }
             toggleCustomGradientInputs();
             toggleReunificationEditor();
+            toggleSpatialEditors();
             scheduleRunImmediate();
         }
 
@@ -3340,6 +3676,12 @@ class GridSimulatorApp {
             toggleCustomGradientInputs();
             scheduleRunImmediate();
         });
+        if (controls.projectionMode) {
+            controls.projectionMode.addEventListener('change', () => {
+                toggleSpatialEditors();
+                scheduleRunImmediate();
+            });
+        }
 
         controls.saveProjectBtn.onclick = saveProject;
         controls.loadProjectSelect.onchange = loadProject;
@@ -3434,6 +3776,7 @@ class GridSimulatorApp {
         app.setEditorError = setEditorError;
         app.toggleCustomGradientInputs = toggleCustomGradientInputs;
         app.toggleReunificationEditor = toggleReunificationEditor;
+        app.toggleSpatialEditors = toggleSpatialEditors;
         app.refreshActiveEditors = refreshActiveEditors;
         app.ensureEditorExpanded = ensureEditorExpanded;
         app.setActiveEditor = setActiveEditor;
@@ -3442,6 +3785,7 @@ class GridSimulatorApp {
         updateProjectList();
         toggleCustomGradientInputs();
         toggleReunificationEditor();
+        toggleSpatialEditors();
         run();
     }
 }
