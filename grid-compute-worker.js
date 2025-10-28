@@ -113,6 +113,21 @@ function hydrateConfig(payload) {
         }
     }
 
+    let backpropFillFn = null;
+    if (typeof safePayload.backpropFillSource === 'string') {
+        try {
+            backpropFillFn = new Function(
+                'childState',
+                'parentState',
+                'context',
+                `return (() => { ${safePayload.backpropFillSource} })();`,
+            );
+        } catch (error) {
+            backpropFillFn = null;
+            console.warn('Backprop fill helper compilation failed in worker', error);
+        }
+    }
+
     let positionFn = null;
     if (typeof safePayload.positionSource === 'string' && safePayload.positionSource.trim().length) {
         try {
@@ -158,6 +173,7 @@ function hydrateConfig(payload) {
         reunificationFn,
         effectiveValueFn,
         backpropFn,
+        backpropFillFn,
         backpropSteps: Number.isFinite(safePayload.backpropSteps) ? safePayload.backpropSteps : 0,
         dimensionDefaults,
         positionFn,
@@ -641,6 +657,7 @@ function createKernel(config) {
                                     totalSteps: steps,
                                     childKey,
                                     parentKey,
+                                    reverseFill: typeof config.backpropFillFn === 'function' ? config.backpropFillFn : null,
                                 },
                             );
                         } catch (error) {

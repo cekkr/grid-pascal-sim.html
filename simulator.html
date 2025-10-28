@@ -515,6 +515,7 @@ return null;</textarea>
                             <div class="editor-tabs">
                                 <button type="button" class="editor-tab active" data-target-editor="effectiveValueLogic">Effective Value</button>
                                 <button type="button" class="editor-tab" data-target-editor="backpropLogic">Backpropagation</button>
+                                <button type="button" class="editor-tab" data-target-editor="backpropFillLogic">Backprop Fill</button>
                             </div>
                         </div>
                         <div class="editor-panes">
@@ -531,6 +532,10 @@ return {
     parent: { valueDelta: delta },
     child: { valueDelta: -delta * 0.25 },
 };</textarea>
+                            </div>
+                            <div class="editor-pane" data-editor-pane="backpropFillLogic">
+                                <label for="backpropFillLogic">Backprop Fill Helper(childState, parentState, context)</label>
+                                <textarea id="backpropFillLogic">return null;</textarea>
                             </div>
                         </div>
                     </section>
@@ -940,6 +945,7 @@ class GridSimulatorApp {
             propagationSecondary: document.getElementById('propagationSecondaryLogic'),
             effectiveValueLogic: document.getElementById('effectiveValueLogic'),
             backpropLogic: document.getElementById('backpropLogic'),
+            backpropFillLogic: document.getElementById('backpropFillLogic'),
             projectName: document.getElementById('projectName'),
             saveProjectBtn: document.getElementById('saveProjectBtn'),
             deleteProjectBtn: document.getElementById('deleteProjectBtn'),
@@ -964,14 +970,14 @@ class GridSimulatorApp {
         };
         this.controls = controls;
         const backpropNotificationEl = document.getElementById('backpropRunStatus');
-        const backpropEditorPane = document.querySelector('.editor-pane[data-editor-pane="backpropLogic"]');
+        const backpropEditorPanes = Array.from(document.querySelectorAll('.editor-pane[data-editor-pane="backpropLogic"], .editor-pane[data-editor-pane="backpropFillLogic"]'));
         const backpropNotificationState = {
             pending: false,
             reason: null,
             timeoutHandle: null,
         };
         this.backpropNotificationEl = backpropNotificationEl;
-        this.backpropEditorPane = backpropEditorPane;
+        this.backpropEditorPanes = backpropEditorPanes;
         const controlsPanel = document.getElementById('controls');
         const editorPanel = document.getElementById('codeEditorPanel');
         const editorContent = document.getElementById('codeEditorContent');
@@ -1077,6 +1083,7 @@ class GridSimulatorApp {
         const defaultReunificationLogicSource = controls.reunificationLogic ? controls.reunificationLogic.value : '';
         const defaultEffectiveValueSource = controls.effectiveValueLogic ? controls.effectiveValueLogic.value : '';
         const defaultBackpropLogicSource = controls.backpropLogic ? controls.backpropLogic.value : '';
+        const defaultBackpropFillLogicSource = controls.backpropFillLogic ? controls.backpropFillLogic.value : '';
         this.defaultColorLogicSource = defaultColorLogicSource;
         this.defaultHdrLogicSource = defaultHdrLogicSource;
         this.defaultPropagationSources = defaultPropagationSources;
@@ -1086,6 +1093,7 @@ class GridSimulatorApp {
         this.defaultReunificationLogicSource = defaultReunificationLogicSource;
         this.defaultEffectiveValueSource = defaultEffectiveValueSource;
         this.defaultBackpropLogicSource = defaultBackpropLogicSource;
+        this.defaultBackpropFillLogicSource = defaultBackpropFillLogicSource;
 
         function getPendingBackpropMessage(reason) {
             switch (reason) {
@@ -1112,11 +1120,14 @@ class GridSimulatorApp {
         }
 
         function animateBackpropPane() {
-            if (!backpropEditorPane) return;
-            backpropEditorPane.classList.remove('backprop-highlight');
-            void backpropEditorPane.offsetWidth;
-            backpropEditorPane.classList.add('backprop-highlight');
-            setTimeout(() => backpropEditorPane.classList.remove('backprop-highlight'), 900);
+            if (!backpropEditorPanes.length) return;
+            backpropEditorPanes.forEach((pane) => {
+                pane.classList.remove('backprop-highlight');
+                // Force reflow per pane to replay animation
+                void pane.offsetWidth;
+                pane.classList.add('backprop-highlight');
+                setTimeout(() => pane.classList.remove('backprop-highlight'), 900);
+            });
         }
 
         function markBackpropPending(reason) {
@@ -1891,7 +1902,7 @@ class GridSimulatorApp {
                 });
                 applySizing(instance);
                 instance.on('change', (cm, change) => {
-                    if (id === 'backpropLogic' && change && change.origin !== 'setValue') {
+                    if ((id === 'backpropLogic' || id === 'backpropFillLogic') && change && change.origin !== 'setValue') {
                         markBackpropPending('code');
                     }
                     scheduleRunDebounced();
@@ -1903,6 +1914,7 @@ class GridSimulatorApp {
             codeEditors.propagationSecondaryLogic = createEditor('propagationSecondaryLogic', controls.propagationSecondary);
             codeEditors.effectiveValueLogic = createEditor('effectiveValueLogic', controls.effectiveValueLogic);
             codeEditors.backpropLogic = createEditor('backpropLogic', controls.backpropLogic);
+            codeEditors.backpropFillLogic = createEditor('backpropFillLogic', controls.backpropFillLogic);
             codeEditors.reunificationLogic = createEditor('reunificationLogic', controls.reunificationLogic);
             codeEditors.colorLogic = createEditor('colorLogic', controls.colorLogic);
             codeEditors.hdrLogic = createEditor('hdrLogic', controls.hdrLogic);
@@ -1915,6 +1927,7 @@ class GridSimulatorApp {
                 controls.propagationSecondary,
                 controls.effectiveValueLogic,
                 controls.backpropLogic,
+                controls.backpropFillLogic,
                 controls.reunificationLogic,
                 controls.colorLogic,
                 controls.hdrLogic,
@@ -2282,6 +2295,7 @@ class GridSimulatorApp {
                                         totalSteps: steps,
                                         childKey,
                                         parentKey,
+                                        reverseFill: typeof config.backpropFillFn === 'function' ? config.backpropFillFn : null,
                                     }
                                 );
                             } catch (error) {
@@ -3036,6 +3050,7 @@ class GridSimulatorApp {
             setEditorError('propagationSecondaryLogic', false);
             setEditorError('effectiveValueLogic', false);
             setEditorError('backpropLogic', false);
+            setEditorError('backpropFillLogic', false);
             setEditorError('reunificationLogic', false);
             setEditorError('colorLogic', false);
             setEditorError('hdrLogic', false);
@@ -3172,19 +3187,45 @@ class GridSimulatorApp {
             }
 
             const backpropSource = getCodeValue('backpropLogic');
+            const sampleChildState = { key: 'child', value: 1, dimensions: sampleDimensions, generation: 1 };
+            const sampleParentState = { key: 'parent', value: 0.5, dimensions: sampleDimensions, generation: 0 };
+            const sampleBackpropContext = {
+                generation: 1,
+                step: 0,
+                totalSteps: Math.max(backpropSteps, 1),
+                childKey: 'child',
+                parentKey: 'parent',
+            };
             let backpropFn;
             try {
                 backpropFn = new Function('childState', 'parentState', 'context', `return (() => { ${backpropSource} })();`);
                 const sampleResult = backpropFn(
-                    { key: 'child', value: 1, dimensions: sampleDimensions, generation: 1 },
-                    { key: 'parent', value: 0.5, dimensions: sampleDimensions, generation: 0 },
-                    { generation: 1, step: 0, totalSteps: Math.max(backpropSteps, 1), childKey: 'child', parentKey: 'parent' }
+                    sampleChildState,
+                    sampleParentState,
+                    sampleBackpropContext
                 );
                 if (sampleResult !== null && sampleResult !== undefined && typeof sampleResult !== 'object') {
                     throw new Error('Backpropagation function must return an object or null.');
                 }
             } catch (error) {
                 setEditorError('backpropLogic', true);
+                return false;
+            }
+
+            const backpropFillSource = getCodeValue('backpropFillLogic');
+            let backpropFillFn = null;
+            try {
+                backpropFillFn = new Function('childState', 'parentState', 'context', `return (() => { ${backpropFillSource} })();`);
+                const fillResult = backpropFillFn(
+                    sampleChildState,
+                    sampleParentState,
+                    sampleBackpropContext
+                );
+                if (fillResult !== null && fillResult !== undefined && typeof fillResult !== 'object') {
+                    throw new Error('Backprop fill helper must return an object or null.');
+                }
+            } catch (error) {
+                setEditorError('backpropFillLogic', true);
                 return false;
             }
 
@@ -3320,6 +3361,8 @@ class GridSimulatorApp {
                 effectiveValueSource,
                 backpropFn,
                 backpropSource,
+                backpropFillFn,
+                backpropFillSource,
                 backpropSteps,
                 binaryEnumerationSupported,
                 projectionMode,
@@ -3344,6 +3387,7 @@ class GridSimulatorApp {
                 },
                 effectiveValueSource,
                 backpropSource,
+                backpropFillSource,
                 backpropSteps,
                 binaryEnumerationSupported,
                 dimensionDefaults,
@@ -3366,6 +3410,7 @@ class GridSimulatorApp {
             setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
             setCodeValue('effectiveValueLogic', config.effectiveValueSource || defaultEffectiveValueSource);
             setCodeValue('backpropLogic', config.backpropSource || defaultBackpropLogicSource);
+            setCodeValue('backpropFillLogic', config.backpropFillSource || defaultBackpropFillLogicSource);
             controls.gradientMode.value = config.gradientMode || 'symmetric';
             if (controls.gradientMode.value === 'custom' && config.gradientCustom) {
                 controls.gradientMin.value = config.gradientCustom.min;
@@ -3509,6 +3554,7 @@ class GridSimulatorApp {
                 propagationSources: config.propagationSources,
                 effectiveValueLogic: config.effectiveValueSource,
                 backpropLogic: config.backpropSource,
+                backpropFillLogic: config.backpropFillSource,
                 backpropSteps: config.backpropSteps,
                 gradientMode: config.gradientMode,
                 gradientCustom: config.gradientCustom,
@@ -3546,6 +3592,7 @@ class GridSimulatorApp {
                 setCodeValue('propagationSecondaryLogic', sources.secondary ?? defaultPropagationSources.secondary);
                 setCodeValue('effectiveValueLogic', proj.effectiveValueLogic || defaultEffectiveValueSource);
                 setCodeValue('backpropLogic', proj.backpropLogic || defaultBackpropLogicSource);
+                setCodeValue('backpropFillLogic', proj.backpropFillLogic || defaultBackpropFillLogicSource);
                 controls.backpropSteps.value = Number.isFinite(proj.backpropSteps) ? proj.backpropSteps : 0;
                 controls.gradientMode.value = proj.gradientMode || 'symmetric';
                 if (controls.gradientMode.value === 'custom' && proj.gradientCustom) {
@@ -3652,11 +3699,74 @@ class GridSimulatorApp {
                     secondary: defaultPropagationSources.secondary,
                 },
                 effective: `return dimensions.primary?.value ?? 0;`,
-                backprop: defaultBackpropLogicSource,
+                backprop: `const helper = context && typeof context.reverseFill === 'function' ? context.reverseFill : null;\nif (!helper) return null;\nconst outcome = helper(childState, parentState, context);\nif (!outcome || typeof outcome !== 'object') return null;\nreturn outcome;`,
+                backpropFill: `const parseKey = (key) => {
+    const parts = String(key || '').split(',');
+    const x = Number(parts[0]);
+    const y = Number(parts[1]);
+    return {
+        x: Number.isFinite(x) ? x : 0,
+        y: Number.isFinite(y) ? y : 0,
+    };
+};
+
+const countBits = (input) => {
+    let value = (input >>> 0);
+    let total = 0;
+    while (value) {
+        value &= (value - 1);
+        total += 1;
+    }
+    return total;
+};
+
+if (!childState || typeof childState !== 'object') return null;
+const coords = parseKey(childState.key);
+const row = Number.isFinite(childState.generation) ? childState.generation : coords.x;
+if (!Number.isFinite(row) || row < 0) return null;
+const colRaw = (row + coords.y) / 2;
+const col = Number.isFinite(colRaw) ? Math.round(colRaw) : 0;
+if (col < 0 || col > row) return null;
+
+if ((row & col) === col) return null;
+const span = row | col;
+if (span <= 0) return null;
+const bitWidth = Math.floor(Math.log2(span)) + 1;
+const maskAll = Math.pow(2, bitWidth) - 1;
+const missing = (maskAll ^ row) & col;
+if (missing === 0) return null;
+
+let depth = 0;
+let walker = missing >>> 0;
+while (walker) {
+    walker &= (walker - 1);
+    depth += 1;
+}
+
+const highestBit = 1 << Math.floor(Math.log2(missing));
+const size = highestBit << 1;
+const localRow = row & (size - 1);
+const localCol = col & (size - 1);
+const mirroredRow = (size - 1) - localRow;
+const isActive = ((mirroredRow & localCol) === localCol);
+if (!isActive) return null;
+
+const stepIndex = (context && Number.isFinite(context.step)) ? context.step : 0;
+const layer = Math.min(stepIndex, Math.max(depth - 1, 0));
+const fillValue = 2 + layer;
+
+const currentValue = Number.isFinite(childState.value) ? childState.value : 0;
+if (fillValue <= currentValue + 1e-6) return null;
+
+return {
+    child: {
+        valueOverride: fillValue,
+    },
+};`,
                 backpropSteps: 0,
                 gradientMode: 'custom',
-                gradientCustom: { min: 0, max: 2 },
-                colorLogic: `const parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(15, 18, 30)';`,
+                gradientCustom: { min: 0, max: 4 },
+                colorLogic: `if (value >= 3.5) {\n    return 'rgb(170, 140, 255)';\n}\nif (value >= 2.5) {\n    return 'rgb(236, 80, 192)';\n}\nconst parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(12, 14, 24)';`,
                 hdrLogic: defaultHdrLogicSource,
                 generations: 180,
                 reunification: 'sum',
@@ -3697,6 +3807,7 @@ class GridSimulatorApp {
             }
             setCodeValue('effectiveValueLogic', preset.effective ?? defaultEffectiveValueSource);
             setCodeValue('backpropLogic', preset.backprop ?? defaultBackpropLogicSource);
+            setCodeValue('backpropFillLogic', preset.backpropFill ?? defaultBackpropFillLogicSource);
             controls.backpropSteps.value = Number.isFinite(preset.backpropSteps) ? preset.backpropSteps : 0;
             controls.gradientMode.value = preset.gradientMode || 'symmetric';
             if (controls.gradientMode.value === 'custom' && preset.gradientCustom) {

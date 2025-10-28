@@ -6,8 +6,8 @@ The Advanced Grid Propagation Simulator is a single-page exploration lab for lat
 
 ## Highlights
 - Resizable control column with a collapsible editor stack; layout choices (width, editor height, collapsed state) persist via `localStorage`.
-- Tabbed CodeMirror editors for primary/secondary propagation, effective-value composition, backpropagation, custom reunification, color, HDR logic, and the new spatial projection/distortion duo-each wired to live re-evaluation with inline error surfacing.
-- Six curated presets (Pascal, Divergent, Backwards, Decay, Sierpinski, Sierpinski-Zeta) that illustrate different move sets, reunification strategies, and rendering palettes.
+- Tabbed CodeMirror editors for primary/secondary propagation, effective-value composition, backpropagation, the new backprop fill helper, custom reunification, color, HDR logic, and the spatial projection/distortion duo - each wired to live re-evaluation with inline error surfacing.
+- Six curated presets (Pascal, Divergent, Backwards, Decay, Sierpinski, Sierpinski-Zeta) that illustrate different move sets, reunification strategies, and rendering palettes; Sierpinski now ships with a reverse-fill backprop pass that paints voids in magenta (step 1) and violet accents (higher steps).
 - Backpropagation loop support that iterates user-defined heuristics over parent/child pairs after the forward sweep.
 - Inspector panel with lineage chips, value summaries, optional binary path enumeration popovers, and view-aware gradient statistics.
 - Canvas renderer that auto-aggregates distant nodes, blends global and viewport statistics, and drives an HDR-aware color grading pipeline.
@@ -21,8 +21,8 @@ The Advanced Grid Propagation Simulator is a single-page exploration lab for lat
 - **Simulation Core** - Choose the number of generations, set the reunification strategy (`sum`, `average`, `max`, or user-defined `personalized` logic), and specify optional backpropagation steps that run after each generation.
 - **Propagation Rules** - Define the move vectors as raw JSON. Two moves enable Pascal-style branches; additional vectors unlock multi-parent rendezvous or backtracking paths.
 - **Projection Modes** - Switch between grid (planar), isometric, or custom JS layouts via the sidebar dropdown. Choosing Custom JS enables the spatial editors, and the selection is saved with each project.
-- **Logic Editors** - The tabbed editors accept JavaScript snippets that return functions. Beyond the propagation/effective/backprop/color stacks, a Spatial Mapping group now exposes Projection and Space Distortion panes so you can script Cartesian layouts and per-edge warps. Toggling the personalized reunification strategy automatically reveals the matching editor. You can hide the entire editor stack for presentation mode; reopening restores the previous height.
-- **Presets** - Buttons seed the workspace with canned move sets and logic. The Sierpinski preset demonstrates parity-driven rendering, Sierpinski-Zeta folds that lattice into a harmonic zeta(1) field with adaptive backprop filling the dark voids, Backwards introduces a negative move to revisit ancestors, and Divergent/Decay highlight gain and attenuation flows.
+- **Logic Editors** - The tabbed editors accept JavaScript snippets that return functions. Beyond the propagation/effective/backprop/backprop-fill/color stacks, a Spatial Mapping group now exposes Projection and Space Distortion panes so you can script Cartesian layouts and per-edge warps. Toggling the personalized reunification strategy automatically reveals the matching editor. You can hide the entire editor stack for presentation mode; reopening restores the previous height.
+- **Presets** - Buttons seed the workspace with canned move sets and logic. The refreshed Sierpinski preset still illustrates parity-driven rendering but now adds a reverse-fill backprop loop that floods every parity-even void in the first step and sharpens the interior with violet accents when you increase the step count, while Sierpinski-Zeta folds that lattice into a harmonic zeta(1) field with adaptive backprop smoothing the dark voids. Backwards introduces a negative move to revisit ancestors, and Divergent/Decay highlight gain and attenuation flows.
 - **Projects** - Name the current configuration and save it to `localStorage`. Saved studies include logic snippets, gradient preferences, projection mode, and layout state. Load or delete entries directly from the sidebar.
 - **Inspector & Analytics** - Clicking a node reveals coordinates, generation, parent/child links, and aggregated dimension metadata. Binary path analytics compute $\binom{n}{k}$ counts, 0/1 histograms, and sample enumerations; set `ENABLE_HOVER_ENUMERATION_POPUP` to `true` in `simulator.html` to mirror these details in hover tooltips.
 - **Canvas Interaction** - Drag to pan, scroll to zoom. When you zoom out beyond an adaptive threshold the renderer clusters nearby nodes, tracking min/max values per bucket to keep the visualization legible.
@@ -63,6 +63,18 @@ backprop(childState, parentState, context)
 ```
 
 Return `{ parent, child }` payloads that describe `valueDelta`, `valueOverride`, or per-dimension adjustments. Steps execute sequentially, and cumulative updates are applied after each iteration to keep the lattice stable.
+
+### Backprop Fill Helper
+The **Backprop Fill** editor compiles an auxiliary routine that you can call from your main backprop logic (or reuse elsewhere):
+
+```js
+fill(childState, parentState, context)
+```
+
+Return the same shape as the primary backprop function (`{ parent, child }` with optional `valueDelta`, `valueOverride`, and per-dimension adjustments). The simulator exposes the compiled helper via `context.reverseFill`; guard it with `typeof context.reverseFill === 'function'` before invoking. The updated Sierpinski preset uses this hook to scan parity-even holes, measure their binary depth, and set `child.valueOverride` to `2 + layer`, where layer `= min(step, depth - 1)` paints magenta (`2`), violet (`3`), and lilac (`4`) tiers as you recurse inward. The helper also inspects `context.step`, so higher backprop steps peel deeper layers of the reverse Sierpinski hierarchy without recomputing the base fill.
+
+### Reverse Sierpinski Backprop
+Load the **Sierpinski** preset and set `Backpropagation Steps` to `1` to flood every parity-even void with the magenta base fill (value `2`). Each additional step activates a deeper binary layer and upgrades the surviving pockets—first to violet (value `3`), then to lilac (value `4`). Because the helper gates on `context.step`, you can jump directly to any depth—the pass only touches holes whose bit-depth still exceeds the requested step.
 
 ### Color and HDR Logic
 Customize visualization with:
@@ -200,6 +212,3 @@ into an HSL triplet: positive values drift from teal to cyan as $\alpha$ grows, 
 - Mirror or tweak existing presets to package new lesson plans or research scenarios.
 - Host the CodeMirror assets locally for offline workshops.
 - Because everything is in `simulator.html`, it is straightforward to bolt on export routines, additional analytics panels, or automated sweeps that iterate over logic presets.
-
-
-
