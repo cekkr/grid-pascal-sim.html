@@ -1431,17 +1431,19 @@ class GridSimulatorApp {
         const AGGREGATION_SCALE_THRESHOLD = 6;
         const AGGREGATION_BUCKET_PIXELS = 8;
         const VIEW_CULL_PADDING = 1.5;
+        const MIN_VIEW_SCALE = 0.0001;
+        const MAX_VIEW_SCALE = 2000;
 
         function getNodeRadius() {
-            return Math.max(0.5, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, 0.0001));
+            return Math.max(0.5, MIN_PIXEL_NODE_RADIUS / Math.max(view.scale, MIN_VIEW_SCALE));
         }
 
         function getEdgeWidth() {
-            return Math.max(0.02, MIN_PIXEL_EDGE_WIDTH / Math.max(view.scale, 0.0001));
+            return Math.max(0.02, MIN_PIXEL_EDGE_WIDTH / Math.max(view.scale, MIN_VIEW_SCALE));
         }
 
         function getSelectionWidth() {
-            return Math.max(0.12, MIN_PIXEL_SELECTION_WIDTH / Math.max(view.scale, 0.0001));
+            return Math.max(0.12, MIN_PIXEL_SELECTION_WIDTH / Math.max(view.scale, MIN_VIEW_SCALE));
         }
 
         function getCodeValue(id) {
@@ -2637,11 +2639,11 @@ class GridSimulatorApp {
 
             if (viewScale !== 1 && scaleX > 0) {
                 // Exponentially adjust the effective X scale with zoom while clamping to a safe positive range.
-                const safeViewScale = Math.max(viewScale, 1e-4);
+                const safeViewScale = Math.max(viewScale, MIN_VIEW_SCALE);
                 const distributionRatio = Math.max(Math.abs(config.xDistributionScale), 1e-4);
                 const exponent = Math.log2(distributionRatio);
                 const exponentialScale = scaleX / Math.pow(safeViewScale, exponent);
-                const minScale = 1e-4;
+                const minScale = MIN_VIEW_SCALE;
                 const maxScale = 1e6;
                 scaleX = clampNumber(exponentialScale, minScale, maxScale);
             }
@@ -2735,13 +2737,21 @@ class GridSimulatorApp {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.save();
             ctx.translate(canvas.width / 2 + view.offsetX, canvas.height / 2 + view.offsetY);
-            ctx.scale(view.scale, view.scale);
+            const safeViewScale = clampNumber(
+                Number.isFinite(view.scale) ? view.scale : MIN_VIEW_SCALE,
+                MIN_VIEW_SCALE,
+                MAX_VIEW_SCALE
+            );
+            if (safeViewScale !== view.scale) {
+                view.scale = safeViewScale;
+            }
+            ctx.scale(safeViewScale, safeViewScale);
 
             const stats = computeGridStats();
             const nodeRadius = getNodeRadius();
             const selectionWidth = getSelectionWidth();
             const edgeWidth = getEdgeWidth();
-            const safeScale = Math.max(view.scale, 0.0001);
+            const safeScale = Math.max(safeViewScale, MIN_VIEW_SCALE);
 
             const hdrContext = { scale: view.scale };
             const applyHDR = (input) => {
@@ -3434,8 +3444,9 @@ class GridSimulatorApp {
 
         function findNodeAt(mouseX, mouseY) {
             const rect = canvas.getBoundingClientRect();
-            const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / view.scale;
-            const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / view.scale;
+            const safeScale = Math.max(view.scale, MIN_VIEW_SCALE);
+            const gridX = (mouseX - rect.left - (canvas.width / 2 + view.offsetX)) / safeScale;
+            const gridY = (mouseY - rect.top - (canvas.height / 2 + view.offsetY)) / safeScale;
             const aggregationMultiplier = view.scale < AGGREGATION_SCALE_THRESHOLD
                 ? Math.min(3, Math.max(1.5, AGGREGATION_SCALE_THRESHOLD / Math.max(view.scale, 0.1)))
                 : 1;
@@ -3830,7 +3841,8 @@ class GridSimulatorApp {
         canvas.addEventListener('wheel', e => {
             e.preventDefault();
             const scaleAmount = e.deltaY < 0 ? 1.05 : 1 / 1.05;
-            view.scale *= scaleAmount;
+            const currentScale = Number.isFinite(view.scale) ? view.scale : MIN_VIEW_SCALE;
+            view.scale = clampNumber(currentScale * scaleAmount, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
             
             drawGrid();
         });
