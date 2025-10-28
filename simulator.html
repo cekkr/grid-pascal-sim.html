@@ -2637,7 +2637,7 @@ class GridSimulatorApp {
             let scaleX = Number.isFinite(config.xDistributionScale) ? config.xDistributionScale : 1;
             scaleX = Math.pow(scaleX, 3);
 
-            if (viewScale !== 1 && scaleX > 0) {
+            if (viewScale !== 1) {
                 // Exponentially adjust the effective X scale with zoom while clamping to a safe positive range.
                 const safeViewScale = Math.max(viewScale, MIN_VIEW_SCALE);
                 const distributionRatio = Math.max(Math.abs(config.xDistributionScale), 1e-4);
@@ -3673,7 +3673,7 @@ class GridSimulatorApp {
                 gradientMode: 'custom',
                 gradientCustom: { min: -10, max: 10 },
                 colorLogic: `const amplitude = Math.abs(value);\nconst span = Math.max(Math.abs(range.max), Math.abs(range.min), 1);\nconst normalized = Math.min(1, amplitude / span);\nconst hue = value >= 0 ? 190 - normalized * 60 : 320 + normalized * 25;\nconst saturation = 58 + normalized * 30;\nconst lightness = value >= 0 ? 24 + normalized * 42 : 46 - normalized * 20;\nreturn 'hsl(' + Math.round(hue) + ', ' + Math.round(saturation) + '%, ' + Math.round(lightness) + '%)';`,
-                projectionMode: 'custom',
+                projectionMode: 'grid',
                 positionLogic: `const snapshot = node || context?.node || null;\nconst generation = snapshot?.gen ?? context.generation ?? 0;\nconst coords = (key || '0,0').split(',');\nconst dx = Number(coords[0]) || 0;\nconst dy = Number(coords[1]) || 0;\nconst harmonic = snapshot?.dimensions?.primary?.value ?? 0;\nconst zetaValue = snapshot?.value ?? 0;\nconst radial = Math.log1p(Math.abs(dx) + Math.abs(dy));\nconst skew = (dx - dy) * 0.04;\nconst spiral = radial * 0.18;\nconst x = generation * 1.12 + skew + spiral * Math.cos(generation * 0.08);\nconst y = -zetaValue * 0.88 + harmonic * 0.12 + spiral * Math.sin(generation * 0.06);\nconst depth = (snapshot?.pathMeta?.depth ?? generation) > 0 ? zetaValue * 0.06 : 0;\nreturn { x, y, z: depth };`,
                 spaceDistortionLogic: `if (!baseResult) return null;\nconst { parentSnapshot, childCoords, generation, dimensionKey } = context;\nconst parentValue = parentSnapshot?.value ?? 0;\nconst radius = Math.hypot(childCoords.x, childCoords.y);\nconst wave = Math.sin(radius * 0.045 + generation * 0.12);\nconst envelope = 1 + Math.log1p(radius) * 0.18;\nconst polarity = parentValue >= 0 ? 1.08 : 0.9;\nconst channelBias = dimensionKey === 'primary' ? 1.0 : 0.45;\nconst multiplier = (1 + wave * 0.3 * channelBias) * envelope * polarity;\nconst meta = Array.isArray(baseResult.meta) ? baseResult.meta.slice() : [];\nmeta.push({ distortion: multiplier, radius, wave });\nreturn { ...baseResult, value: baseResult.value * multiplier, meta };`,
                 hdrLogic: defaultHdrLogicSource,
