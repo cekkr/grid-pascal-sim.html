@@ -3710,16 +3710,6 @@ class GridSimulatorApp {
     };
 };
 
-const countBits = (input) => {
-    let value = (input >>> 0);
-    let total = 0;
-    while (value) {
-        value &= (value - 1);
-        total += 1;
-    }
-    return total;
-};
-
 if (!childState || typeof childState !== 'object') return null;
 const coords = parseKey(childState.key);
 const row = Number.isFinite(childState.generation) ? childState.generation : coords.x;
@@ -3728,33 +3718,24 @@ const colRaw = (row + coords.y) / 2;
 const col = Number.isFinite(colRaw) ? Math.round(colRaw) : 0;
 if (col < 0 || col > row) return null;
 
-if ((row & col) === col) return null;
-const span = row | col;
-if (span <= 0) return null;
-const bitWidth = Math.floor(Math.log2(span)) + 1;
-const maskAll = Math.pow(2, bitWidth) - 1;
-const missing = (maskAll ^ row) & col;
-if (missing === 0) return null;
+const leftMoves = row - col;
+const rightMoves = col;
+const conflict = leftMoves & rightMoves;
+if (conflict === 0) return null;
 
-let depth = 0;
-let walker = missing >>> 0;
-while (walker) {
-    walker &= (walker - 1);
-    depth += 1;
-}
+const highestBit = 1 << Math.floor(Math.log2(conflict));
+const apexLeft = leftMoves & ~(highestBit - 1);
+const apexRight = rightMoves & ~(highestBit - 1);
+const localLeft = leftMoves - apexLeft;
+const localRight = rightMoves - apexRight;
 
-const highestBit = 1 << Math.floor(Math.log2(missing));
-const size = highestBit << 1;
-const localRow = row & (size - 1);
-const localCol = col & (size - 1);
-const mirroredRow = (size - 1) - localRow;
-const isActive = ((mirroredRow & localCol) === localCol);
-if (!isActive) return null;
+if ((localLeft & localRight) !== 0) return null;
 
 const stepIndex = (context && Number.isFinite(context.step)) ? context.step : 0;
-const layer = Math.min(stepIndex, Math.max(depth - 1, 0));
-const fillValue = 2 + layer;
+const maxLayer = Math.floor(Math.log2(highestBit));
+if (stepIndex > maxLayer) return null;
 
+const fillValue = Math.min(4, 2 + stepIndex);
 const currentValue = Number.isFinite(childState.value) ? childState.value : 0;
 if (fillValue <= currentValue + 1e-6) return null;
 
