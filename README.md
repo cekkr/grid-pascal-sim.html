@@ -138,25 +138,60 @@ $$
 which produce Cantor-like dust with no coincidences. Implementing those moves requires extending the simulator to four diagonal vectors with diminishing magnitudes; the existing framework already supports variable-length move sets and custom reunification to explore such systems.
 
 ### Sierpinski-Zeta Preset
-The Sierpinski-Zeta preset layers a truncated harmonic series over the classic parity mask so each generation samples the divergence of $\zeta(s)$ near its pole at $s = 1$. The effective-value snippet translates the textbook sum $\sum_{n=1}^{m} \frac{1}{n}$ straight into JavaScript, incrementing `harmonic` inside a bounded loop whose upper limit grows with the generation, before folding in angular and sine-based warps that emulate the pole's turbulence. Parity-odd nodes climb along that harmonic envelope while parity-even voids receive a controlled negative pressure; a single backprop step then reconciles those voids with the target depth.
+This preset turns the binary Pascal lattice into a harmonic sampler that mirrors the blow-up of the Riemann zeta function at $s = 1$. It combines three ideas: a parity mask that produces the Sierpinski gasket, a truncated harmonic series that approximates $\zeta(1)$, and a backpropagation pass that regularizes the "holes" while the renderer maps amplitudes to gradients.
 
-Using the new Projection editor, the preset scripts a Cartesian mapping that observes both the lattice offsets $(dx, dy)$ and the harmonic magnitude. The logic computes a logarithmic radius via `Math.log1p(|dx| + |dy|)` and mixes it with cosine/sine spirals so the diverging partial sums trace a readable timeline across the canvas. Because the projection receives the complete `node` snapshot (value, dimensions, ancestry, path metadata), you can correlate spatial placement with backpropagated corrections while inspecting a node.
+**Parity-driven lattice.** The primary propagation in `simulator.html:3666` reduces the effective binomial coefficient to a parity bit
 
-The companion Space Distortion function modulates each edge contribution with
+$$
+p_{n,k} = \binom{n}{k} \bmod 2,
+$$
 
-```text
-multiplier = (1 + sin(r * 0.045 + g * 0.12) * 0.3 * channelBias)
-             * (1 + log1p(r) * 0.18)
-             * polarity;
-```
+so only the odd coefficients survive. Lucas' theorem tells us the surviving coordinates $(n,k)$ form the classic Sierpinski triangle. These cells are the scaffolding on which the divergent signal will ride.
 
-where `r = (x + y)` and `g` is the parent generation. The code writes the distortion coefficient, radius, and wave phase into `meta` so the downstream inspector reveals exactly how space warped the transmission.
+**Sampling $\zeta(1)$ via harmonic partial sums.** For a node at generation $n$ the effective-value logic (see `simulator.html:3670`) accumulates the truncated harmonic number
 
-The associated color ramp maps positive lobes to turquoise spectral bands and drives negative wells toward magenta-black, making the Sierpiski shadow triangles visible as a programmable bridge to zeta dynamics.
+$$
+H_{m(n)} = \sum_{r=1}^{m(n)} \frac{1}{r}, \qquad m(n) = \min\{256, \max(2, n+2)\},
+$$
 
-## Reference Material
-- `studies/grid-analysis-ITA.md` " combinatorial theory, trinomial expansions, and fractal lattice discourse.
-- `studies/propagate-parentValue.md` " explains the separation between forward propagation and reunification.
+which grows like $\log m + \gamma$ and therefore encodes the pole of $\zeta(s)$ at $s=1$. Each active node scales this divergence by a warp term $W_{n,k}$ composed of smooth sine/cosine envelopes that depend on the integer coordinates $(x,y)$ and the generation. The rendered scalar is therefore
+
+$$
+V_{n,k} = \begin{cases}
+ H_{m(n)} \; W_{n,k}, & p_{n,k} = 1, \\
+ -\beta_{n,k} H_{m(n)} \; W_{n,k}, & p_{n,k} = 0,
+\end{cases}
+$$
+
+where $\beta_{n,k}$ is the hole boost chosen in `simulator.html->presets.sierpinskiZeta.effective` to keep voids in tension with their odd neighbours. In effect the positive lobes trace the divergent harmonic envelope while the negative wells record the compensating deficit.
+
+**Backpropagated regularization.** The single backprop loop (`simulator.html->presets.sierpinskiZeta.backprop`) nudges the parity-even sites toward
+
+$$
+V^{\text{target}}_{n,k} = -\beta_{n,k} H_{m(n)},
+$$
+
+by applying a local correction
+
+$$
+\Delta V = 0.3 \left( V^{\text{target}}_{n,k} - V_{n,k}\right).
+$$
+
+The correction is skipped for parity-odd nodes, so the Sierpinski mask stays intact. This light-touch feedback keeps the gradient finite and readable despite the underlying divergence.
+
+**Spatial and chromatic projection.** The position logic (`simulator.html->presets.sierpinskiZeta.positionLogic`) lays out nodes using
+
+$$
+\bigl( x, y \bigr) = \left( 1.12\,n + f_{\text{skew}}(x,y),\; -0.88\,V_{n,k} + 0.12\,H_{m(n)} + f_{\text{spiral}}(x,y,n) \right),
+$$
+
+so vertical displacement directly reflects the sampled zeta amplitude while logarithmic spirals keep distant generations legible. Finally the color logic (`simulator.html:->presets.sierpinskiZeta.colorLogic`) converts the signed magnitude
+
+$$
+\alpha = \frac{|V_{n,k}|}{\max(|V_{\min}|, |V_{\max}|, 1)}
+$$
+
+into an HSL triplet: positive values drift from teal to cyan as $\alpha$ grows, negative values slide toward magenta-black. The resulting canvas is a color-gradient plot of the truncated $\zeta(1)$ reach across the Sierpinski lattice, with the backpropagated voids completing the continuous banding around the pole.
 
 ## Configuration Flags
 - `ENABLE_HOVER_ENUMERATION_POPUP`: toggled in `simulator.html` to mirror inspector enumerations as hover tooltips on the canvas and lineage chips.
@@ -165,9 +200,6 @@ The associated color ramp maps positive lobes to turquoise spectral bands and dr
 - Mirror or tweak existing presets to package new lesson plans or research scenarios.
 - Host the CodeMirror assets locally for offline workshops.
 - Because everything is in `simulator.html`, it is straightforward to bolt on export routines, additional analytics panels, or automated sweeps that iterate over logic presets.
-
-
-
 
 
 
