@@ -1409,7 +1409,7 @@ class GridSimulatorApp {
             const ratio = accentuateRatio(hdrRatio, intensity);
             return rgbArrayToCss(sampleColorStops(negativeColorStops, ratio));
         };
-        let config = { xDistributionScale: 1 };
+        let config = { xDistributionScale: 1, backpropStepModes: null };
         let grid = new Map();
         let selectedNodeKey = null;
         let view = { scale: 25, offsetX: 0, offsetY: 50, isDragging: false, lastX: 0, lastY: 0 };
@@ -2286,6 +2286,9 @@ class GridSimulatorApp {
                             if (!parentNode) return;
                             let result = null;
                             try {
+                                const stepMode = Array.isArray(config.backpropStepModes) && config.backpropStepModes.length
+                                    ? config.backpropStepModes[step % config.backpropStepModes.length]
+                                    : null;
                                 result = config.backpropFn(
                                     buildBackpropState(childKey, childNode),
                                     buildBackpropState(parentKey, parentNode),
@@ -2295,6 +2298,7 @@ class GridSimulatorApp {
                                         totalSteps: steps,
                                         childKey,
                                         parentKey,
+                                        mode: stepMode,
                                         reverseFill: typeof config.backpropFillFn === 'function' ? config.backpropFillFn : null,
                                     }
                                 );
@@ -3364,6 +3368,7 @@ class GridSimulatorApp {
                 backpropFillFn,
                 backpropFillSource,
                 backpropSteps,
+                backpropStepModes: Array.isArray(config.backpropStepModes) ? config.backpropStepModes.slice() : null,
                 binaryEnumerationSupported,
                 projectionMode,
                 xDistributionScale,
@@ -3389,6 +3394,7 @@ class GridSimulatorApp {
                 backpropSource,
                 backpropFillSource,
                 backpropSteps,
+                backpropStepModes: Array.isArray(config.backpropStepModes) ? config.backpropStepModes.slice() : null,
                 binaryEnumerationSupported,
                 dimensionDefaults,
                 positionSource: workerPositionSource,
@@ -3556,6 +3562,7 @@ class GridSimulatorApp {
                 backpropLogic: config.backpropSource,
                 backpropFillLogic: config.backpropFillSource,
                 backpropSteps: config.backpropSteps,
+                backpropStepModes: Array.isArray(config.backpropStepModes) ? config.backpropStepModes.slice() : null,
                 gradientMode: config.gradientMode,
                 gradientCustom: config.gradientCustom,
                 colorLogic: config.colorLogicSource,
@@ -3609,6 +3616,7 @@ class GridSimulatorApp {
                 setCodeValue('positionLogic', proj.positionLogic || defaultPositionLogicSource);
                 setCodeValue('spaceDistortionLogic', proj.spaceDistortionLogic || defaultSpaceDistortionSource);
                 controls.projectName.value = name;
+                config.backpropStepModes = Array.isArray(proj.backpropStepModes) ? proj.backpropStepModes.slice() : null;
                 toggleCustomGradientInputs();
                 toggleReunificationEditor();
                 toggleSpatialEditors();
@@ -3724,16 +3732,38 @@ const conflict = leftMoves & rightMoves;
 if (conflict === 0) return null;
 
 const highestBit = 1 << Math.floor(Math.log2(conflict));
+if (!Number.isFinite(highestBit) || highestBit <= 0) return null;
 const apexLeft = leftMoves & ~(highestBit - 1);
 const apexRight = rightMoves & ~(highestBit - 1);
 const localLeft = leftMoves - apexLeft;
 const localRight = rightMoves - apexRight;
 
-if ((localLeft & localRight) !== 0) return null;
-
 const stepIndex = (context && Number.isFinite(context.step)) ? context.step : 0;
 const maxLayer = Math.floor(Math.log2(highestBit));
 if (stepIndex > maxLayer) return null;
+
+const mask = highestBit - 1;
+const orientationReverse = (localLeft & localRight) === 0;
+const mirroredLeft = mask >= 0 ? (mask - localLeft) : 0;
+const mirroredRight = mask >= 0 ? (mask - localRight) : 0;
+const orientationForward = mask >= 0 && ((mirroredLeft & mirroredRight) === 0);
+
+const stepModeRaw = (context && typeof context.mode === 'string') ? context.mode.toLowerCase() : null;
+let requireReverse = false;
+let requireForward = false;
+if (stepModeRaw === 'reverse') {
+    requireReverse = true;
+} else if (stepModeRaw === 'forward') {
+    requireForward = true;
+} else if (stepModeRaw === 'both' || stepModeRaw === 'either') {
+    requireReverse = false;
+    requireForward = false;
+} else {
+    requireReverse = (stepIndex % 2) === 0;
+    requireForward = !requireReverse;
+}
+if (requireReverse && !orientationReverse) return null;
+if (requireForward && !orientationForward) return null;
 
 const fillValue = Math.min(4, 2 + stepIndex);
 const currentValue = Number.isFinite(childState.value) ? childState.value : 0;
@@ -3745,6 +3775,7 @@ return {
     },
 };`,
                 backpropSteps: 0,
+                backpropStepModes: ['reverse', 'forward', 'forward'],
                 gradientMode: 'custom',
                 gradientCustom: { min: 0, max: 4 },
                 colorLogic: `if (value >= 3.5) {\n    return 'rgb(170, 140, 255)';\n}\nif (value >= 2.5) {\n    return 'rgb(236, 80, 192)';\n}\nconst parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(12, 14, 24)';`,
@@ -3821,6 +3852,7 @@ return {
                 }
                 controls.projectionMode.value = mode;
             }
+            config.backpropStepModes = Array.isArray(preset.backpropStepModes) ? preset.backpropStepModes.slice() : null;
             toggleCustomGradientInputs();
             toggleReunificationEditor();
             toggleSpatialEditors();

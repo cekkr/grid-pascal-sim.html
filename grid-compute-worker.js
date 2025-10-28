@@ -162,6 +162,10 @@ function hydrateConfig(payload) {
         ? safePayload.dimensionDefaults
         : {};
 
+    const backpropStepModes = Array.isArray(safePayload.backpropStepModes)
+        ? safePayload.backpropStepModes.filter((mode) => typeof mode === 'string')
+        : null;
+
     return {
         binaryEnumerationSupported: Boolean(safePayload.binaryEnumerationSupported),
         generations: Number.isFinite(safePayload.generations) ? safePayload.generations : 0,
@@ -175,6 +179,7 @@ function hydrateConfig(payload) {
         backpropFn,
         backpropFillFn,
         backpropSteps: Number.isFinite(safePayload.backpropSteps) ? safePayload.backpropSteps : 0,
+        backpropStepModes,
         dimensionDefaults,
         positionFn,
         spaceDistortionFn,
@@ -648,6 +653,9 @@ function createKernel(config) {
                         if (!parentNode) return;
                         let result = null;
                         try {
+                            const stepMode = Array.isArray(config.backpropStepModes) && config.backpropStepModes.length
+                                ? config.backpropStepModes[step % config.backpropStepModes.length]
+                                : null;
                             result = config.backpropFn(
                                 buildBackpropState(childKey, childNode),
                                 buildBackpropState(parentKey, parentNode),
@@ -657,6 +665,7 @@ function createKernel(config) {
                                     totalSteps: steps,
                                     childKey,
                                     parentKey,
+                                    mode: stepMode,
                                     reverseFill: typeof config.backpropFillFn === 'function' ? config.backpropFillFn : null,
                                 },
                             );
