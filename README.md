@@ -140,7 +140,7 @@ which produce Cantor-like dust with no coincidences. Implementing those moves re
 ### Sierpinski-Zeta Preset
 This preset turns the binary Pascal lattice into a harmonic sampler that mirrors the blow-up of the Riemann zeta function at $s = 1$. It combines three ideas: a parity mask that produces the Sierpinski gasket, a truncated harmonic series that approximates $\zeta(1)$, and a backpropagation pass that regularizes the "holes" while the renderer maps amplitudes to gradients.
 
-**Parity-driven lattice.** The primary propagation in `simulator.html:3666` reduces the effective binomial coefficient to a parity bit
+**Parity-driven lattice.** The primary propagation in `simulator.html:->presets.sierpinskiZeta.propagation` reduces the effective binomial coefficient to a parity bit
 
 $$
 p_{n,k} = \binom{n}{k} \bmod 2,
@@ -148,7 +148,7 @@ $$
 
 so only the odd coefficients survive. Lucas' theorem tells us the surviving coordinates $(n,k)$ form the classic Sierpinski triangle. These cells are the scaffolding on which the divergent signal will ride.
 
-**Sampling $\zeta(1)$ via harmonic partial sums.** For a node at generation $n$ the effective-value logic (see `simulator.html:3670`) accumulates the truncated harmonic number
+**Sampling $\zeta(1)$ via harmonic partial sums.** For a node at generation $n$ the effective-value logic (see `simulator.html:->presets.sierpinskiZeta.effective`) accumulates the truncated harmonic number
 
 $$
 H_{m(n)} = \sum_{r=1}^{m(n)} \frac{1}{r}, \qquad m(n) = \min\{256, \max(2, n+2)\},
