@@ -1439,7 +1439,7 @@ class GridSimulatorApp {
         const MIN_PIXEL_EDGE_WIDTH = 0.6;
         const MIN_PIXEL_SELECTION_WIDTH = 1.8;
         const EDGE_RENDER_SCALE_THRESHOLD = 0.9;
-        const AGGREGATION_SCALE_THRESHOLD = 6;
+        const AGGREGATION_SCALE_THRESHOLD = 20;
         const AGGREGATION_BUCKET_PIXELS = 8;
         const VIEW_CULL_PADDING = 1.5;
         const MIN_VIEW_SCALE = 0.0001;
@@ -2819,6 +2819,7 @@ class GridSimulatorApp {
                     if (bucket.maxX < viewport.minX || bucket.minX > viewport.maxX || bucket.maxY < viewport.minY || bucket.minY > viewport.maxY) {
                         return;
                     }
+
                     visibleBuckets.push(bucket);
                     trackStatsValue(valueStatsTracker, bucket.maxValue);
                     trackStatsValue(valueStatsTracker, bucket.minValue);
