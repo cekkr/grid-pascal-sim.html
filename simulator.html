@@ -3964,10 +3964,23 @@ return {
         let generateGridScrollTimeout = null;
         canvas.addEventListener('wheel', e => {
             e.preventDefault();
-            const scaleAmount = e.deltaY < 0 ? 1.05 : 1 / 1.05;
+            const rect = canvas.getBoundingClientRect();
+            const canvasWidth = canvas.width || canvas.offsetWidth || rect.width;
+            const canvasHeight = canvas.height || canvas.offsetHeight || rect.height;
+            const pointerX = e.clientX - rect.left;
+            const pointerY = e.clientY - rect.top;
+
             const currentScale = Number.isFinite(view.scale) ? view.scale : MIN_VIEW_SCALE;
-            view.scale = clampNumber(currentScale * scaleAmount, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
-            
+            const scaleAmount = e.deltaY < 0 ? 1.05 : 1 / 1.05;
+            const nextScale = clampNumber(currentScale * scaleAmount, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
+
+            const worldXBefore = (pointerX - (canvasWidth / 2 + view.offsetX)) / currentScale;
+            const worldYBefore = (pointerY - (canvasHeight / 2 + view.offsetY)) / currentScale;
+
+            view.scale = nextScale;
+            view.offsetX = pointerX - canvasWidth / 2 - worldXBefore * nextScale;
+            view.offsetY = pointerY - canvasHeight / 2 - worldYBefore * nextScale;
+
             drawGrid();
         });
         canvas.addEventListener('click', e => {
