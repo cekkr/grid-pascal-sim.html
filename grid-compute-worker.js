@@ -251,6 +251,102 @@ function createKernel(config) {
         return null;
     }
 
+    function parseNodeKey(nodeKey) {
+        if (typeof nodeKey !== 'string') {
+            return { x: 0, y: 0 };
+        }
+        const parts = nodeKey.split(',');
+        if (parts.length < 2) {
+            const numeric = Number(nodeKey);
+            if (Number.isFinite(numeric)) {
+                return { x: numeric, y: 0 };
+            }
+            return { x: 0, y: 0 };
+        }
+        const x = Number(parts[0]);
+        const y = Number(parts[1]);
+        return {
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
+        };
+    }
+
+    function computeBinaryLatticeMetrics(nodeKey, node) {
+        if (!nodeKey) return null;
+        const coords = parseNodeKey(nodeKey);
+        const rawRow = Number.isFinite(node?.generation)
+            ? node.generation
+            : Number.isFinite(node?.gen)
+                ? node.gen
+                : coords.x;
+        const row = Number.isFinite(rawRow) ? rawRow : coords.x;
+        if (!Number.isFinite(row) || row < 0) return null;
+        const colRaw = (row + coords.y) / 2;
+        if (!Number.isFinite(colRaw)) return null;
+        const col = Math.round(colRaw);
+        if (col < 0 || col > row) {
+            return {
+                coords,
+                row,
+                col,
+                leftMoves: row - col,
+                rightMoves: col,
+                conflict: 0,
+                highestBit: 0,
+                layerDepth: -1,
+                orientationReverse: false,
+                orientationForward: false,
+            };
+        }
+        const leftMoves = row - col;
+        const rightMoves = col;
+        const conflict = leftMoves & rightMoves;
+        if (conflict === 0) {
+            return {
+                coords,
+                row,
+                col,
+                leftMoves,
+                rightMoves,
+                conflict: 0,
+                highestBit: 0,
+                layerDepth: -1,
+                orientationReverse: false,
+                orientationForward: false,
+            };
+        }
+        const exponent = Math.floor(Math.log2(conflict));
+        const highestBit = exponent >= 0 ? (1 << exponent) : 0;
+        const mask = highestBit > 0 ? highestBit - 1 : 0;
+        const apexLeft = leftMoves & ~mask;
+        const apexRight = rightMoves & ~mask;
+        const localLeft = leftMoves - apexLeft;
+        const localRight = rightMoves - apexRight;
+        const orientationReverse = (localLeft & localRight) === 0;
+        const mirroredLeft = mask >= 0 ? (mask - localLeft) : 0;
+        const mirroredRight = mask >= 0 ? (mask - localRight) : 0;
+        const orientationForward = mask >= 0 && ((mirroredLeft & mirroredRight) === 0);
+        return {
+            coords,
+            row,
+            col,
+            leftMoves,
+            rightMoves,
+            conflict,
+            highestBit,
+            mask,
+            apexLeft,
+            apexRight,
+            localLeft,
+            localRight,
+            mirroredLeft,
+            mirroredRight,
+            layerDepth: exponent,
+            orientationReverse,
+            orientationForward,
+        };
+    }
+
     function createNodeSnapshot(nodeKey, node) {
         if (!node) return null;
         return {
@@ -648,30 +744,32 @@ function createKernel(config) {
                 const nodes = generationBuckets.get(generation) || [];
                 nodes.forEach(([childKey, childNode]) => {
                     if (!Array.isArray(childNode.parents) || !childNode.parents.length) return;
-                    childNode.parents.forEach((parentKey) => {
-                        const parentNode = grid.get(parentKey);
-                        if (!parentNode) return;
-                        let result = null;
-                        try {
-                            const stepMode = Array.isArray(config.backpropStepModes) && config.backpropStepModes.length
+                        const lattice = computeBinaryLatticeMetrics(childKey, childNode);
+                        childNode.parents.forEach((parentKey) => {
+                            const parentNode = grid.get(parentKey);
+                            if (!parentNode) return;
+                            let result = null;
+                            try {
+                                const stepMode = Array.isArray(config.backpropStepModes) && config.backpropStepModes.length
                                 ? config.backpropStepModes[step % config.backpropStepModes.length]
                                 : null;
                             result = config.backpropFn(
                                 buildBackpropState(childKey, childNode),
                                 buildBackpropState(parentKey, parentNode),
-                                {
-                                    generation,
-                                    step,
-                                    totalSteps: steps,
-                                    childKey,
-                                    parentKey,
-                                    mode: stepMode,
-                                    reverseFill: typeof config.backpropFillFn === 'function' ? config.backpropFillFn : null,
-                                },
-                            );
-                        } catch (error) {
-                            console.warn('Backprop logic error (worker)', error);
-                        }
+                                    {
+                                        generation,
+                                        step,
+                                        totalSteps: steps,
+                                        childKey,
+                                        parentKey,
+                                        mode: stepMode,
+                                        reverseFill: typeof config.backpropFillFn === 'function' ? config.backpropFillFn : null,
+                                        lattice,
+                                    },
+                                );
+                            } catch (error) {
+                                console.warn('Backprop logic error (worker)', error);
+                            }
                         if (!result) return;
                         if (result.parent) accumulateNodeUpdate(parentUpdates, parentKey, result.parent);
                         if (result.child) accumulateNodeUpdate(childUpdates, childKey, result.child);

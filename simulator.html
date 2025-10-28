@@ -2871,8 +2871,15 @@ class GridSimulatorApp {
                         if (!bucket.count) return;
                         const averageValue = bucket.valueSum / bucket.count;
                         const strongestAbs = Math.abs(bucket.maxValue) >= Math.abs(bucket.minValue) ? bucket.maxValue : bucket.minValue;
-                        const blend = Math.min(0.7, bucket.count / 12);
-                        const displayValue = averageValue * (1 - blend) + strongestAbs * blend;
+                        let emphasis = Math.min(0.7, bucket.count / 12);
+                        if (bucket.count <= 3) {
+                            emphasis = 1;
+                        } else if (Math.abs(strongestAbs) > Math.abs(averageValue)) {
+                            const ratio = Math.abs(averageValue) / (Math.abs(strongestAbs) || 1);
+                            const highlightBias = 0.5 + (1 - ratio) * 0.4;
+                            emphasis = Math.max(emphasis, clampNumber(highlightBias, 0.5, 0.9));
+                        }
+                        const displayValue = averageValue * (1 - emphasis) + strongestAbs * emphasis;
                         bucket.displayValue = displayValue;
                         trackStatsValue(renderStatsTracker, displayValue);
                     });
@@ -3708,45 +3715,50 @@ class GridSimulatorApp {
                 },
                 effective: `return dimensions.primary?.value ?? 0;`,
                 backprop: `const helper = context && typeof context.reverseFill === 'function' ? context.reverseFill : null;\nif (!helper) return null;\nconst outcome = helper(childState, parentState, context);\nif (!outcome || typeof outcome !== 'object') return null;\nreturn outcome;`,
-                backpropFill: `const parseKey = (key) => {
-    const parts = String(key || '').split(',');
-    const x = Number(parts[0]);
-    const y = Number(parts[1]);
+                backpropFill: `const computeFallbackMetrics = (state) => {
+    const key = String(state?.key || '');
+    const parts = key.split(',');
+    const gx = Number(parts[0]);
+    const gy = Number(parts[1]);
+    const generation = Number.isFinite(state?.generation) ? state.generation : gx;
+    if (!Number.isFinite(generation) || generation < 0) return null;
+    const colRaw = (generation + gy) / 2;
+    if (!Number.isFinite(colRaw)) return null;
+    const col = Math.round(colRaw);
+    if (col < 0 || col > generation) return null;
+    const leftMoves = generation - col;
+    const rightMoves = col;
+    const conflict = leftMoves & rightMoves;
+    if (conflict === 0) {
+        return { conflict: 0, layerDepth: -1, orientationReverse: false, orientationForward: false };
+    }
+    const exponent = Math.floor(Math.log2(conflict));
+    const highestBit = exponent >= 0 ? (1 << exponent) : 0;
+    const mask = highestBit > 0 ? highestBit - 1 : 0;
+    const apexLeft = leftMoves & ~mask;
+    const apexRight = rightMoves & ~mask;
+    const localLeft = leftMoves - apexLeft;
+    const localRight = rightMoves - apexRight;
+    const orientationReverse = (localLeft & localRight) === 0;
+    const mirroredLeft = mask >= 0 ? (mask - localLeft) : 0;
+    const mirroredRight = mask >= 0 ? (mask - localRight) : 0;
+    const orientationForward = mask >= 0 && ((mirroredLeft & mirroredRight) === 0);
     return {
-        x: Number.isFinite(x) ? x : 0,
-        y: Number.isFinite(y) ? y : 0,
+        conflict,
+        layerDepth: exponent,
+        orientationReverse,
+        orientationForward,
     };
 };
 
 if (!childState || typeof childState !== 'object') return null;
-const coords = parseKey(childState.key);
-const row = Number.isFinite(childState.generation) ? childState.generation : coords.x;
-if (!Number.isFinite(row) || row < 0) return null;
-const colRaw = (row + coords.y) / 2;
-const col = Number.isFinite(colRaw) ? Math.round(colRaw) : 0;
-if (col < 0 || col > row) return null;
-
-const leftMoves = row - col;
-const rightMoves = col;
-const conflict = leftMoves & rightMoves;
-if (conflict === 0) return null;
-
-const highestBit = 1 << Math.floor(Math.log2(conflict));
-if (!Number.isFinite(highestBit) || highestBit <= 0) return null;
-const apexLeft = leftMoves & ~(highestBit - 1);
-const apexRight = rightMoves & ~(highestBit - 1);
-const localLeft = leftMoves - apexLeft;
-const localRight = rightMoves - apexRight;
+const lattice = (context && context.lattice) ? context.lattice : null;
+const metrics = lattice && typeof lattice === 'object' ? lattice : computeFallbackMetrics(childState);
+if (!metrics || !Number.isFinite(metrics.conflict) || metrics.conflict === 0) return null;
 
 const stepIndex = (context && Number.isFinite(context.step)) ? context.step : 0;
-const maxLayer = Math.floor(Math.log2(highestBit));
-if (stepIndex > maxLayer) return null;
-
-const mask = highestBit - 1;
-const orientationReverse = (localLeft & localRight) === 0;
-const mirroredLeft = mask >= 0 ? (mask - localLeft) : 0;
-const mirroredRight = mask >= 0 ? (mask - localRight) : 0;
-const orientationForward = mask >= 0 && ((mirroredLeft & mirroredRight) === 0);
+const layerDepth = Number.isFinite(metrics.layerDepth) ? metrics.layerDepth : -1;
+if (layerDepth >= 0 && stepIndex > layerDepth) return null;
 
 const stepModeRaw = (context && typeof context.mode === 'string') ? context.mode.toLowerCase() : null;
 let requireReverse = false;
@@ -3762,8 +3774,8 @@ if (stepModeRaw === 'reverse') {
     requireReverse = (stepIndex % 2) === 0;
     requireForward = !requireReverse;
 }
-if (requireReverse && !orientationReverse) return null;
-if (requireForward && !orientationForward) return null;
+if (requireReverse && metrics.orientationReverse === false) return null;
+if (requireForward && metrics.orientationForward === false) return null;
 
 const fillValue = Math.min(4, 2 + stepIndex);
 const currentValue = Number.isFinite(childState.value) ? childState.value : 0;
@@ -3775,7 +3787,7 @@ return {
     },
 };`,
                 backpropSteps: 0,
-                backpropStepModes: ['reverse', 'forward', 'forward'],
+                backpropStepModes: ['both', 'forward', 'forward'],
                 gradientMode: 'custom',
                 gradientCustom: { min: 0, max: 4 },
                 colorLogic: `if (value >= 3.5) {\n    return 'rgb(170, 140, 255)';\n}\nif (value >= 2.5) {\n    return 'rgb(236, 80, 192)';\n}\nconst parity = Math.abs(Math.round(value)) % 2;\nif (parity === 1) {\n    return 'rgb(64, 214, 204)';\n}\nreturn 'rgb(12, 14, 24)';`,
